@@ -45,6 +45,15 @@ void (async () => {
     if (!result.ok || !result.result) {
         console.log("\nParsed probability: FAILED (graceful)");
         console.log(`Reason: ${result.error ?? "unknown parsing/request error"}`);
+        const failureStep = result.raw?.step;
+        if (failureStep) {
+            console.log(`Failure step: ${failureStep}`);
+        }
+        const rawPrepareStatus = result.raw?.rawPrepareStatus;
+        if (rawPrepareStatus) {
+            console.log("Raw prepare status:");
+            console.log(JSON.stringify(rawPrepareStatus, null, 2));
+        }
         process.exit(0);
     }
     console.log("\nParsed probability:");

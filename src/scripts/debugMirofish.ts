@@ -10,18 +10,40 @@ void (async () => {
 
   const syntheticSeed = seedPacketSchema.parse({
     marketId: "debug-test",
-    question: "Will a coin flip land heads?",
-    bull_case: "A fair coin has a 50% chance of heads.",
-    bear_case: "A fair coin has a 50% chance of tails.",
-    current_odds: 0.5,
-    best_bid: 0.49,
-    best_ask: 0.51,
+    question: "Will Candidate Alice win the 2028 Metro City mayoral election?",
+    bull_case:
+      "Alice benefits from incumbency, older voters, and business support.",
+    bear_case:
+      "Brian Lee is gaining among youth voters and housing activists.",
+    current_odds: 0.54,
+    best_bid: 0.53,
+    best_ask: 0.55,
     spread: 0.02,
-    key_entities: ["coin flip"],
+    key_entities: [
+      "Alice Morgan",
+      "Brian Lee",
+      "Metro City Election Commission",
+      "Youth voters",
+      "Senior voters",
+      "Local business owners",
+      "Public transit unions",
+      "Housing activists",
+      "Local newspapers",
+      "Polling agencies"
+    ],
     resolution_date: "2099-01-01",
-    resolution_rules: ["Synthetic debug market, not real."],
-    evidence_summary: "No external evidence.",
-    uncertainty_factors: ["Random event"]
+    resolution_rules: [
+      "Synthetic debug market, not real.",
+      "Resolve YES if Alice Morgan wins the 2028 Metro City mayoral election."
+    ],
+    evidence_summary:
+      "Alice has strong name recognition and incumbent advantage. Brian Lee has momentum among younger voters. Housing affordability and transit reliability are major issues. Local business owners are split. Recent polling is mixed.",
+    uncertainty_factors: [
+      "turnout",
+      "late scandals",
+      "polling error",
+      "endorsements"
+    ]
   });
 
   const result = await client.predict(syntheticSeed, {
@@ -49,6 +71,15 @@ void (async () => {
   if (!result.ok || !result.result) {
     console.log("\nParsed probability: FAILED (graceful)");
     console.log(`Reason: ${result.error ?? "unknown parsing/request error"}`);
+    const failureStep = (result.raw as any)?.step;
+    if (failureStep) {
+      console.log(`Failure step: ${failureStep}`);
+    }
+    const rawPrepareStatus = (result.raw as any)?.rawPrepareStatus;
+    if (rawPrepareStatus) {
+      console.log("Raw prepare status:");
+      console.log(JSON.stringify(rawPrepareStatus, null, 2));
+    }
     process.exit(0);
   }
 

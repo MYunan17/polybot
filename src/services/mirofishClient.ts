@@ -26,6 +26,17 @@ export interface MiroFishPredictResponse {
   raw?: unknown;
 }
 
+interface PrepareFailureDetail {
+  step: "prepareSimulation";
+  simulationId: string;
+  taskId: string;
+  status: string;
+  entitiesCount?: number;
+  entityTypes?: string[];
+  error?: string;
+  rawPrepareStatus: unknown;
+}
+
 interface WorkflowContext {
   projectId: string;
   graphTaskId: string;
@@ -34,6 +45,12 @@ interface WorkflowContext {
   prepareTaskId: string;
   reportTaskId: string;
   reportId: string;
+}
+
+class WorkflowStepError extends Error {
+  constructor(public readonly detail: PrepareFailureDetail | Record<string, unknown>, message?: string) {
+    super(message ?? "MiroFish workflow step failed");
+  }
 }
 
 export class MiroFishClient {
@@ -92,7 +109,16 @@ export class MiroFishClient {
 
       const prep = await this.prepareSimulation(wf.simulationId);
       wf.prepareTaskId = prep.taskId;
-      await this.waitPrepare(wf.prepareTaskId, wf.simulationId);
+      const prepareReady = await this.waitPrepare(wf.prepareTaskId, wf.simulationId);
+      if (!["ready", "completed"].includes(prepareReady.status)) {
+        throw new WorkflowStepError({
+          step: "prepareSimulation",
+          simulationId: wf.simulationId,
+          taskId: wf.prepareTaskId,
+          status: prepareReady.status,
+          rawPrepareStatus: prepareReady.raw
+        }, `Prepare not ready: ${prepareReady.status}`);
+      }
 
       const rounds = options.debugMode ? Math.min(options.rounds, config.MIROFISH_DEBUG_MAX_ROUNDS) : options.rounds;
       await this.startSimulation(wf.simulationId, { rounds });
@@ -133,6 +159,13 @@ export class MiroFishClient {
         raw: { workflow: wf, report }
       };
     } catch (err: any) {
+      if (err instanceof WorkflowStepError) {
+        return {
+          ok: false,
+          error: err.message,
+          raw: err.detail
+        };
+      }
       const fallback =
         err?.code === "ECONNREFUSED"
           ? `Connection refused to ${config.MIROFISH_URL}`
@@ -154,7 +187,7 @@ export class MiroFishClient {
     form.append("files", file, `polybot-${seed.marketId}.md`);
     form.append(
       "simulation_requirement",
-      "Run a prediction-market reasoning simulation. Estimate the probability that the market resolves YES. The final report must include a numeric YES probability from 0 to 100 and a confidence_score."
+      "Run a social prediction simulation with the named voter groups, candidates, media, unions, activists, polling agencies, and local business owners as agents. Estimate the probability that Alice Morgan wins. The final report must include numeric YES probability and confidence_score."
     );
     form.append("project_name", `polybot-${seed.marketId}-${Date.now()}`);
 
@@ -232,6 +265,22 @@ export class MiroFishClient {
       });
       last = res.data;
       const status = normalizeStatus(res.data);
+      const prepareFail = inspectPrepareFailure(res.data);
+      if (prepareFail.shouldFail) {
+        throw new WorkflowStepError(
+          {
+            step: "prepareSimulation",
+            simulationId,
+            taskId,
+            status,
+            entitiesCount: prepareFail.entitiesCount,
+            entityTypes: prepareFail.entityTypes,
+            error: prepareFail.error,
+            rawPrepareStatus: res.data
+          },
+          `Prepare failed: ${prepareFail.error ?? "unknown prepare failure"}`
+        );
+      }
       if (status === "completed" || status === "ready") return { status, raw: res.data };
       if (status === "failed" || status === "error") throw new Error(`prepare failed: ${stringifyCompact(res.data)}`);
       await sleep(config.MIROFISH_POLL_INTERVAL_MS);
@@ -465,4 +514,48 @@ function stringifyCompact(v: unknown): string {
 
 function clamp(n: number, min: number, max: number): number {
   return Math.min(max, Math.max(min, n));
+}
+
+function inspectPrepareFailure(data: unknown): {
+  shouldFail: boolean;
+  entitiesCount?: number;
+  entityTypes?: string[];
+  error?: string;
+} {
+  const status = normalizeStatus(data);
+  const errorField = readPath(data, "error") ?? readPath(data, "data.error") ?? readPath(data, "result.error");
+  const messageField = String(
+    readPath(data, "message") ??
+    readPath(data, "data.message") ??
+    readPath(data, "result.message") ??
+    ""
+  ).toLowerCase();
+  const entitiesCountRaw =
+    readPath(data, "entities_count") ??
+    readPath(data, "data.entities_count") ??
+    readPath(data, "result.entities_count");
+  const entitiesCount = Number.isFinite(Number(entitiesCountRaw)) ? Number(entitiesCountRaw) : undefined;
+  const entityTypesRaw =
+    readPath(data, "entity_types") ??
+    readPath(data, "data.entity_types") ??
+    readPath(data, "result.entity_types");
+  const entityTypes = Array.isArray(entityTypesRaw) ? entityTypesRaw.map((x: unknown) => String(x)) : undefined;
+
+  const noEntitiesMessage =
+    messageField.includes("no matching entities") ||
+    messageField.includes("no entities") ||
+    messageField.includes("entities_count=0");
+
+  const shouldFail =
+    status === "failed" ||
+    Boolean(errorField) ||
+    noEntitiesMessage ||
+    entitiesCount === 0;
+
+  return {
+    shouldFail,
+    entitiesCount,
+    entityTypes,
+    error: errorField ? String(errorField) : noEntitiesMessage ? String(messageField || "no entities found") : undefined
+  };
 }
