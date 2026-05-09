@@ -2,6 +2,7 @@
 Object.defineProperty(exports, "__esModule", { value: true });
 const mirofishClient_1 = require("../services/mirofishClient");
 const validation_1 = require("../utils/validation");
+const config_1 = require("../config");
 void (async () => {
     const client = new mirofishClient_1.MiroFishClient();
     const health = await client.healthCheck();
@@ -22,20 +23,27 @@ void (async () => {
         evidence_summary: "No external evidence.",
         uncertainty_factors: ["Random event"]
     });
-    if (!health.ok) {
-        console.log("\nMiroFish is not reachable, so no prediction call was made.");
-        console.log("Start MiroFish and retry: npm run debug:mirofish");
-        process.exit(0);
-    }
     const result = await client.predict(syntheticSeed, {
         agents: 5,
-        rounds: 2,
-        model: "deepseek-v3"
+        rounds: config_1.config.MIROFISH_DEBUG_MAX_ROUNDS,
+        model: "deepseek-v3",
+        debugMode: true
     });
-    console.log("\nRaw predict response:");
-    console.log(JSON.stringify(result.raw ?? result, null, 2));
+    console.log("\nWorkflow raw response:");
+    console.log(JSON.stringify(result.raw ?? {}, null, 2));
+    const wf = result.raw?.workflow;
+    if (wf) {
+        console.log("\nWorkflow steps:");
+        console.log(`project_id: ${wf.projectId ?? "-"}`);
+        console.log(`graph task: ${wf.graphTaskId ?? "-"}`);
+        console.log(`graph_id: ${wf.graphId ?? "-"}`);
+        console.log(`simulation_id: ${wf.simulationId ?? "-"}`);
+        console.log(`prepare task: ${wf.prepareTaskId ?? "-"}`);
+        console.log(`report task: ${wf.reportTaskId ?? "-"}`);
+        console.log(`report_id: ${wf.reportId ?? "-"}`);
+    }
     if (!result.ok || !result.result) {
-        console.log("\nParsed probability: FAILED");
+        console.log("\nParsed probability: FAILED (graceful)");
         console.log(`Reason: ${result.error ?? "unknown parsing/request error"}`);
         process.exit(0);
     }

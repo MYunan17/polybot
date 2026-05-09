@@ -1,5 +1,6 @@
 import { MiroFishClient } from "../services/mirofishClient";
 import { seedPacketSchema } from "../utils/validation";
+import { config } from "../config";
 
 void (async () => {
   const client = new MiroFishClient();
@@ -23,23 +24,30 @@ void (async () => {
     uncertainty_factors: ["Random event"]
   });
 
-  if (!health.ok) {
-    console.log("\nMiroFish is not reachable, so no prediction call was made.");
-    console.log("Start MiroFish and retry: npm run debug:mirofish");
-    process.exit(0);
-  }
-
   const result = await client.predict(syntheticSeed, {
     agents: 5,
-    rounds: 2,
-    model: "deepseek-v3"
+    rounds: config.MIROFISH_DEBUG_MAX_ROUNDS,
+    model: "deepseek-v3",
+    debugMode: true
   });
 
-  console.log("\nRaw predict response:");
-  console.log(JSON.stringify(result.raw ?? result, null, 2));
+  console.log("\nWorkflow raw response:");
+  console.log(JSON.stringify(result.raw ?? {}, null, 2));
+
+  const wf = (result.raw as any)?.workflow;
+  if (wf) {
+    console.log("\nWorkflow steps:");
+    console.log(`project_id: ${wf.projectId ?? "-"}`);
+    console.log(`graph task: ${wf.graphTaskId ?? "-"}`);
+    console.log(`graph_id: ${wf.graphId ?? "-"}`);
+    console.log(`simulation_id: ${wf.simulationId ?? "-"}`);
+    console.log(`prepare task: ${wf.prepareTaskId ?? "-"}`);
+    console.log(`report task: ${wf.reportTaskId ?? "-"}`);
+    console.log(`report_id: ${wf.reportId ?? "-"}`);
+  }
 
   if (!result.ok || !result.result) {
-    console.log("\nParsed probability: FAILED");
+    console.log("\nParsed probability: FAILED (graceful)");
     console.log(`Reason: ${result.error ?? "unknown parsing/request error"}`);
     process.exit(0);
   }

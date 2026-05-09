@@ -6,6 +6,7 @@ Object.defineProperty(exports, "__esModule", { value: true });
 exports.MiroFishClient = void 0;
 const axios_1 = __importDefault(require("axios"));
 const config_1 = require("../config");
+const rateLimit_1 = require("../utils/rateLimit");
 const retry_1 = require("../utils/retry");
 class MiroFishClient {
     async healthCheck() {
@@ -14,7 +15,7 @@ class MiroFishClient {
             const url = `${config_1.config.MIROFISH_URL}${route}`;
             try {
                 const res = await axios_1.default.get(url, {
-                    timeout: Math.min(config_1.config.MIROFISH_REQUEST_TIMEOUT_MS, 8000),
+                    timeout: Math.min(config_1.config.MIROFISH_REQUEST_TIMEOUT_MS, 10000),
                     validateStatus: () => true
                 });
                 if (res.status >= 200 && res.status < 500) {
@@ -42,155 +43,363 @@ class MiroFishClient {
         return {
             ok: false,
             url: config_1.config.MIROFISH_URL,
-            message: "MiroFish unreachable. Ensure container is running and port is mapped (e.g., localhost:5001)."
+            message: "MiroFish unreachable. Start container/service and verify MIROFISH_URL."
         };
     }
     async predict(seed, options) {
-        const routes = [config_1.config.MIROFISH_ROUTE_PRIMARY, config_1.config.MIROFISH_ROUTE_FALLBACK]
-            .map((r) => r.trim())
-            .filter(Boolean);
-        const routeTried = [];
-        for (const route of routes) {
-            const url = `${config_1.config.MIROFISH_URL}${route.startsWith("/") ? route : `/${route}`}`;
-            routeTried.push(route);
-            try {
-                const res = await (0, retry_1.withRetry)(async () => axios_1.default.post(url, {
-                    seed,
-                    agents: options.agents,
-                    rounds: options.rounds,
-                    model: options.model ?? "deepseek-v3"
-                }, { timeout: config_1.config.MIROFISH_REQUEST_TIMEOUT_MS }), 2, 800);
-                const parsed = parseMiroFishResult(seed.marketId, res.data);
-                if (!parsed.ok) {
-                    return { ok: false, routeTried, error: parsed.error, raw: res.data };
-                }
-                return { ok: true, routeTried, result: parsed.result, raw: res.data };
-            }
-            catch (err) {
-                const e = err;
-                const status = e.response?.status;
-                if (status === 404)
-                    continue;
+        try {
+            const wf = {};
+            const project = await this.createProjectFromSeed(seed);
+            wf.projectId = project.projectId;
+            const build = await this.buildGraph(wf.projectId, seed.marketId);
+            wf.graphTaskId = build.taskId;
+            const graph = await this.waitGraphBuild(wf.graphTaskId, wf.projectId);
+            wf.graphId = graph.graphId;
+            const sim = await this.createSimulation(wf.projectId, wf.graphId);
+            wf.simulationId = sim.simulationId;
+            const prep = await this.prepareSimulation(wf.simulationId);
+            wf.prepareTaskId = prep.taskId;
+            await this.waitPrepare(wf.prepareTaskId, wf.simulationId);
+            const rounds = options.debugMode ? Math.min(options.rounds, config_1.config.MIROFISH_DEBUG_MAX_ROUNDS) : options.rounds;
+            await this.startSimulation(wf.simulationId, { rounds });
+            await this.waitSimulation(wf.simulationId);
+            const reportTask = await this.generateReport(wf.simulationId);
+            wf.reportTaskId = reportTask.taskId;
+            const reportDone = await this.waitReport(wf.reportTaskId, wf.simulationId);
+            wf.reportId = reportDone.reportId;
+            const report = await this.fetchReport(wf.reportId);
+            const parsed = this.parseProbabilityFromReport(report);
+            if (!parsed.ok) {
                 return {
                     ok: false,
-                    routeTried,
-                    error: `MiroFish request failed on ${route}: ${e.message}`,
-                    raw: e.response?.data
+                    error: parsed.error,
+                    raw: { workflow: wf, report }
                 };
             }
+            return {
+                ok: true,
+                result: {
+                    marketId: seed.marketId,
+                    rawConfidenceScore: parsed.rawConfidenceScore,
+                    rawProbability: parsed.rawProbability,
+                    reportText: parsed.reportText,
+                    strongestYesArguments: [],
+                    strongestNoArguments: [],
+                    uncertainty: "workflow_report_parsed",
+                    modelMetadata: {
+                        workflow: wf,
+                        model: options.model ?? "deepseek-v3",
+                        agents: options.agents,
+                        rounds
+                    }
+                },
+                raw: { workflow: wf, report }
+            };
         }
-        return {
-            ok: false,
-            routeTried,
-            error: `Unsupported MiroFish routes. Tried: ${routeTried.join(", ")}`
-        };
+        catch (err) {
+            return {
+                ok: false,
+                error: err?.message ?? "MiroFish workflow failed",
+                raw: err?.response?.data ?? err
+            };
+        }
+    }
+    async createProjectFromSeed(seed) {
+        const markdown = this.seedToMarkdown(seed);
+        const form = new FormData();
+        const file = new Blob([markdown], { type: "text/markdown" });
+        form.append("files", file, `polybot-${seed.marketId}.md`);
+        form.append("simulation_requirement", "Run a prediction-market reasoning simulation. Estimate the probability that the market resolves YES. The final report must include a numeric YES probability from 0 to 100 and a confidence_score.");
+        form.append("project_name", `polybot-${seed.marketId}-${Date.now()}`);
+        const res = await this.post("/api/graph/ontology/generate", form, {
+            headers: {}
+        });
+        const projectId = extractId(res.data, ["project_id", "projectId", "id", "data.project_id"]);
+        if (!projectId)
+            throw new Error("MiroFish createProjectFromSeed failed: project_id missing");
+        return { projectId, raw: res.data };
+    }
+    async buildGraph(projectId, marketId) {
+        const res = await this.post("/api/graph/build", {
+            project_id: projectId,
+            graph_name: `polybot-${marketId}`,
+            chunk_size: 500,
+            chunk_overlap: 50
+        });
+        const taskId = extractId(res.data, ["task_id", "taskId", "id", "data.task_id"]);
+        if (!taskId)
+            throw new Error("MiroFish buildGraph failed: task_id missing");
+        return { taskId, raw: res.data };
+    }
+    async waitGraphBuild(taskId, projectId) {
+        const deadline = Date.now() + config_1.config.MIROFISH_GRAPH_TIMEOUT_MS;
+        let last;
+        while (Date.now() < deadline) {
+            const res = await this.get(`/api/graph/task/${taskId}`);
+            last = res.data;
+            const status = normalizeStatus(res.data);
+            if (status === "completed" || status === "ready") {
+                const graphId = extractId(res.data, ["result.graph_id", "graph_id", "data.graph_id"]) ??
+                    (await this.fetchGraphIdFromProject(projectId));
+                if (!graphId)
+                    throw new Error("Graph completed but graph_id missing");
+                return { graphId, raw: res.data };
+            }
+            if (status === "failed" || status === "error")
+                throw new Error(`Graph build failed: ${stringifyCompact(res.data)}`);
+            await (0, rateLimit_1.sleep)(config_1.config.MIROFISH_POLL_INTERVAL_MS);
+        }
+        throw new Error(`Graph build timeout. last=${stringifyCompact(last)}`);
+    }
+    async createSimulation(projectId, graphId) {
+        const res = await this.post("/api/simulation/create", {
+            project_id: projectId,
+            graph_id: graphId,
+            enable_twitter: true,
+            enable_reddit: true
+        });
+        const simulationId = extractId(res.data, ["simulation_id", "simulationId", "id", "data.simulation_id"]);
+        if (!simulationId)
+            throw new Error("createSimulation failed: simulation_id missing");
+        return { simulationId, raw: res.data };
+    }
+    async prepareSimulation(simulationId) {
+        const res = await this.post("/api/simulation/prepare", {
+            simulation_id: simulationId,
+            use_llm_for_profiles: true,
+            parallel_profile_count: 1,
+            force_regenerate: false
+        });
+        const taskId = extractId(res.data, ["task_id", "taskId", "id", "data.task_id"]);
+        if (!taskId)
+            throw new Error("prepareSimulation failed: task_id missing");
+        return { taskId, raw: res.data };
+    }
+    async waitPrepare(taskId, simulationId) {
+        const deadline = Date.now() + config_1.config.MIROFISH_PREPARE_TIMEOUT_MS;
+        let last;
+        while (Date.now() < deadline) {
+            const res = await this.post("/api/simulation/prepare/status", {
+                task_id: taskId,
+                simulation_id: simulationId
+            });
+            last = res.data;
+            const status = normalizeStatus(res.data);
+            if (status === "completed" || status === "ready")
+                return { status, raw: res.data };
+            if (status === "failed" || status === "error")
+                throw new Error(`prepare failed: ${stringifyCompact(res.data)}`);
+            await (0, rateLimit_1.sleep)(config_1.config.MIROFISH_POLL_INTERVAL_MS);
+        }
+        throw new Error(`prepare timeout. last=${stringifyCompact(last)}`);
+    }
+    async startSimulation(simulationId, options) {
+        const res = await this.post("/api/simulation/start", {
+            simulation_id: simulationId,
+            platform: "parallel",
+            max_rounds: options.rounds,
+            enable_graph_memory_update: false,
+            force: false
+        });
+        return { raw: res.data };
+    }
+    async waitSimulation(simulationId) {
+        const deadline = Date.now() + config_1.config.MIROFISH_SIMULATION_TIMEOUT_MS;
+        let last;
+        while (Date.now() < deadline) {
+            const res = await this.get(`/api/simulation/${simulationId}/run-status`);
+            last = res.data;
+            const status = normalizeStatus(res.data);
+            if (status === "completed" || status === "stopped" || status === "ready")
+                return { status, raw: res.data };
+            if (status === "failed" || status === "error")
+                throw new Error(`simulation failed: ${stringifyCompact(res.data)}`);
+            await (0, rateLimit_1.sleep)(config_1.config.MIROFISH_POLL_INTERVAL_MS);
+        }
+        throw new Error(`simulation timeout. last=${stringifyCompact(last)}`);
+    }
+    async generateReport(simulationId) {
+        const res = await this.post("/api/report/generate", {
+            simulation_id: simulationId,
+            force_regenerate: false
+        });
+        const taskId = extractId(res.data, ["task_id", "taskId", "id", "data.task_id"]);
+        if (!taskId)
+            throw new Error("generateReport failed: task_id missing");
+        return { taskId, raw: res.data };
+    }
+    async waitReport(taskId, simulationId) {
+        const deadline = Date.now() + config_1.config.MIROFISH_REPORT_TIMEOUT_MS;
+        let last;
+        while (Date.now() < deadline) {
+            let data;
+            try {
+                data = (await this.post("/api/report/generate/status", {
+                    task_id: taskId,
+                    simulation_id: simulationId
+                })).data;
+            }
+            catch {
+                data = (await this.get(`/api/report/generate/status?report_id=${encodeURIComponent(taskId)}`)).data;
+            }
+            last = data;
+            const status = normalizeStatus(data);
+            if (status === "completed" || status === "ready") {
+                const reportId = extractId(data, ["report_id", "reportId", "data.report_id", "result.report_id", "id"]);
+                if (!reportId)
+                    throw new Error(`waitReport completed but report_id missing: ${stringifyCompact(data)}`);
+                return { reportId, raw: data };
+            }
+            if (status === "failed" || status === "error")
+                throw new Error(`report failed: ${stringifyCompact(data)}`);
+            await (0, rateLimit_1.sleep)(config_1.config.MIROFISH_POLL_INTERVAL_MS);
+        }
+        throw new Error(`report timeout. last=${stringifyCompact(last)}`);
+    }
+    async fetchReport(reportId) {
+        const res = await this.get(`/api/report/${reportId}`);
+        const reportText = readPath(res.data, "markdown_content") ??
+            readPath(res.data, "content") ??
+            readPath(res.data, "report") ??
+            readPath(res.data, "data.markdown_content") ??
+            readPath(res.data, "data.content") ??
+            stringifyCompact(res.data);
+        return { reportText: String(reportText ?? ""), raw: res.data };
+    }
+    parseProbabilityFromReport(report) {
+        const text = report.reportText ?? "";
+        const patterns = [
+            /YES probability\s*:\s*(\d+(?:\.\d+)?)\s*%/i,
+            /yes_probability\s*:\s*(\d+(?:\.\d+)?)/i,
+            /probability\s*:\s*(\d+(?:\.\d+)?)\s*%/i,
+            /probability\s*:\s*(0?\.\d+)/i,
+            /resolves YES\s*:\s*(\d+(?:\.\d+)?)\s*%/i
+        ];
+        let probability;
+        for (const p of patterns) {
+            const m = text.match(p);
+            if (m?.[1]) {
+                const n = Number(m[1]);
+                probability = n > 1 ? n / 100 : n;
+                break;
+            }
+        }
+        const confPatterns = [
+            /confidence_score\s*:\s*(\d+(?:\.\d+)?)\s*%?/i,
+            /Confidence Score\s*:\s*(\d+(?:\.\d+)?)\s*%?/i
+        ];
+        let confidence;
+        for (const p of confPatterns) {
+            const m = text.match(p);
+            if (m?.[1]) {
+                const n = Number(m[1]);
+                confidence = n > 1 ? n : n * 100;
+                break;
+            }
+        }
+        if (!Number.isFinite(probability)) {
+            return { ok: false, error: "Could not parse numeric probability from report", reportText: text };
+        }
+        const rawProbability = clamp(probability, 0, 1);
+        const rawConfidenceScore = clamp(confidence ?? rawProbability * 100, 0, 100);
+        return { ok: true, rawConfidenceScore, rawProbability, reportText: text };
+    }
+    async fetchGraphIdFromProject(projectId) {
+        try {
+            const res = await this.get(`/api/graph/project/${projectId}`);
+            return extractId(res.data, ["graph_id", "data.graph_id", "result.graph_id"]);
+        }
+        catch {
+            return null;
+        }
+    }
+    seedToMarkdown(seed) {
+        return [
+            `# Prediction Market Seed: ${seed.marketId}`,
+            "",
+            `## question`,
+            seed.question,
+            "",
+            `## bull_case`,
+            seed.bull_case,
+            "",
+            `## bear_case`,
+            seed.bear_case,
+            "",
+            `## current_odds`,
+            String(seed.current_odds),
+            "",
+            `## best_bid`,
+            String(seed.best_bid ?? ""),
+            "",
+            `## best_ask`,
+            String(seed.best_ask ?? ""),
+            "",
+            `## spread`,
+            String(seed.spread ?? ""),
+            "",
+            `## key_entities`,
+            seed.key_entities.join(", "),
+            "",
+            `## resolution_date`,
+            seed.resolution_date,
+            "",
+            `## resolution_rules`,
+            seed.resolution_rules.join("\n"),
+            "",
+            `## evidence_summary`,
+            seed.evidence_summary,
+            "",
+            `## uncertainty_factors`,
+            seed.uncertainty_factors.join(", ")
+        ].join("\n");
+    }
+    async get(path) {
+        return (0, retry_1.withRetry)(async () => axios_1.default.get(`${config_1.config.MIROFISH_URL}${path}`, {
+            timeout: config_1.config.MIROFISH_REQUEST_TIMEOUT_MS
+        }), 2, 800);
+    }
+    async post(path, payload, extra) {
+        return (0, retry_1.withRetry)(async () => axios_1.default.post(`${config_1.config.MIROFISH_URL}${path}`, payload, {
+            timeout: config_1.config.MIROFISH_REQUEST_TIMEOUT_MS,
+            headers: extra?.headers
+        }), 2, 800);
     }
 }
 exports.MiroFishClient = MiroFishClient;
-function parseMiroFishResult(marketId, payload) {
-    const p = (payload ?? {});
-    const reportObj = (p.report && typeof p.report === "object") ? p.report : {};
-    const rawConfidenceCandidate = pickFirstNumber([
-        p.confidence_score,
-        p.confidenceScore,
-        p.confidence,
-        reportObj.confidence_score,
-        reportObj.confidence
-    ]);
-    const rawProbabilityCandidate = pickFirstNumber([
-        p.rawProbability,
-        p.probability,
-        reportObj.probability
-    ]);
-    const reportText = [
-        asString(p.reportText),
-        asString(p.report),
-        asString(p.summary),
-        asString(p.text),
-        asString(reportObj.text)
-    ].filter(Boolean).join("\n");
-    const textParsed = parseFromText(reportText);
-    const confidence = normalizeToScore(rawConfidenceCandidate ?? textParsed.confidence);
-    const probability = normalizeToProbability(rawProbabilityCandidate ?? textParsed.probability ?? (confidence === null ? undefined : confidence));
-    if (confidence === null || probability === null) {
-        return { ok: false, error: "Unable to parse confidence/probability from MiroFish response" };
+function extractId(data, paths) {
+    for (const p of paths) {
+        const v = readPath(data, p);
+        if (v !== undefined && v !== null && String(v).trim() !== "")
+            return String(v);
     }
-    return {
-        ok: true,
-        result: {
-            marketId,
-            rawConfidenceScore: confidence,
-            rawProbability: probability,
-            reportText: reportText.slice(0, 6000),
-            strongestYesArguments: normalizeStringArray(p.strongestYesArguments ?? reportObj.strongestYesArguments),
-            strongestNoArguments: normalizeStringArray(p.strongestNoArguments ?? reportObj.strongestNoArguments),
-            uncertainty: asString(p.uncertainty ?? reportObj.uncertainty) || "unknown",
-            modelMetadata: p.modelMetadata ?? reportObj.modelMetadata ?? {}
-        }
-    };
+    return null;
 }
-function parseFromText(text) {
-    if (!text)
-        return {};
-    const confPatterns = [
-        /confidence[_\s-]*score\s*:\s*(\d+(?:\.\d+)?)\s*%?/i,
-        /confidence\s*:\s*(\d+(?:\.\d+)?)\s*%?/i
-    ];
-    const probPatterns = [
-        /probability\s*:\s*(\d+(?:\.\d+)?)\s*%?/i,
-        /yes\s+probability\s*:\s*(\d+(?:\.\d+)?)\s*%?/i
-    ];
-    const confidence = extractPatternNumber(text, confPatterns);
-    const probability = extractPatternNumber(text, probPatterns);
-    return { confidence, probability };
+function readPath(obj, path) {
+    if (!obj || typeof obj !== "object")
+        return undefined;
+    return path.split(".").reduce((acc, k) => (acc && acc[k] !== undefined ? acc[k] : undefined), obj);
 }
-function extractPatternNumber(text, patterns) {
-    for (const pattern of patterns) {
-        const m = text.match(pattern);
-        if (m?.[1])
-            return Number(m[1]);
+function normalizeStatus(data) {
+    const candidates = [
+        readPath(data, "status"),
+        readPath(data, "task_status"),
+        readPath(data, "state"),
+        readPath(data, "data.status"),
+        readPath(data, "result.status"),
+        readPath(data, "run_status")
+    ]
+        .map((x) => (typeof x === "string" ? x.toLowerCase() : ""))
+        .filter(Boolean);
+    return candidates[0] ?? "unknown";
+}
+function stringifyCompact(v) {
+    try {
+        return JSON.stringify(v);
     }
-    return undefined;
-}
-function pickFirstNumber(vals) {
-    for (const v of vals) {
-        const n = Number(v);
-        if (Number.isFinite(n))
-            return n;
+    catch {
+        return String(v);
     }
-    return undefined;
-}
-function normalizeToScore(n) {
-    if (!Number.isFinite(n))
-        return null;
-    if (n <= 1)
-        return clamp(n * 100, 0, 100);
-    return clamp(n, 0, 100);
-}
-function normalizeToProbability(n) {
-    if (!Number.isFinite(n))
-        return null;
-    if (n > 1)
-        return clamp(n / 100, 0, 1);
-    return clamp(n, 0, 1);
-}
-function normalizeStringArray(v) {
-    if (!Array.isArray(v))
-        return [];
-    return v.map((x) => String(x)).filter(Boolean).slice(0, 8);
-}
-function asString(v) {
-    if (typeof v === "string")
-        return v;
-    if (v && typeof v === "object") {
-        try {
-            return JSON.stringify(v);
-        }
-        catch {
-            return "";
-        }
-    }
-    return "";
 }
 function clamp(n, min, max) {
     return Math.min(max, Math.max(min, n));
