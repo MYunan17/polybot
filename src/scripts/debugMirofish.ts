@@ -66,6 +66,12 @@ void (async () => {
     console.log(`prepare task: ${wf.prepareTaskId ?? "-"}`);
     console.log(`report task: ${wf.reportTaskId ?? "-"}`);
     console.log(`report_id: ${wf.reportId ?? "-"}`);
+    console.log("final run-status:");
+    console.log(JSON.stringify(wf.finalRunStatusRaw ?? {}, null, 2));
+    console.log("report generate raw response:");
+    console.log(JSON.stringify(wf.reportGenerateRaw ?? {}, null, 2));
+    console.log("report status raw response:");
+    console.log(JSON.stringify(wf.reportStatusRaw ?? {}, null, 2));
   }
 
   if (!result.ok || !result.result) {
@@ -89,7 +95,8 @@ void (async () => {
       {
         marketId: result.result.marketId,
         rawConfidenceScore: result.result.rawConfidenceScore,
-        rawProbability: result.result.rawProbability
+        rawProbability: result.result.rawProbability,
+        parseSource: (result.result.modelMetadata as any)?.parseSource ?? "-"
       },
       null,
       2

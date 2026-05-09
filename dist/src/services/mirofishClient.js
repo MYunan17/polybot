@@ -78,12 +78,17 @@ class MiroFishClient {
             }
             const rounds = options.debugMode ? Math.min(options.rounds, config_1.config.MIROFISH_DEBUG_MAX_ROUNDS) : options.rounds;
             await this.startSimulation(wf.simulationId, { rounds });
-            await this.waitSimulation(wf.simulationId);
+            const simDone = await this.waitSimulation(wf.simulationId);
+            wf.finalRunStatusRaw = simDone.raw;
             const reportTask = await this.generateReport(wf.simulationId);
             wf.reportTaskId = reportTask.taskId;
-            const reportDone = await this.waitReport(wf.reportTaskId, wf.simulationId);
+            wf.reportId = reportTask.reportId;
+            wf.reportGenerateRaw = reportTask.raw;
+            const reportDone = await this.waitReport(wf.reportTaskId, wf.simulationId, wf.reportId);
             wf.reportId = reportDone.reportId;
-            const report = await this.fetchReport(wf.reportId);
+            wf.reportStatusRaw = reportDone.rawStatus;
+            wf.reportBySimulationRaw = reportDone.rawBySimulation;
+            const report = reportDone.report ?? (await this.fetchReportBySimulation(wf.simulationId));
             const parsed = this.parseProbabilityFromReport(report);
             if (!parsed.ok) {
                 return {
@@ -106,7 +111,8 @@ class MiroFishClient {
                         workflow: wf,
                         model: options.model ?? "deepseek-v3",
                         agents: options.agents,
-                        rounds
+                        rounds,
+                        parseSource: parsed.source
                     }
                 },
                 raw: { workflow: wf, report }
@@ -137,7 +143,7 @@ class MiroFishClient {
         const form = new FormData();
         const file = new Blob([markdown], { type: "text/markdown" });
         form.append("files", file, `polybot-${seed.marketId}.md`);
-        form.append("simulation_requirement", "Run a prediction-market reasoning simulation. Estimate the probability that the market resolves YES. The final report must include a numeric YES probability from 0 to 100 and a confidence_score.");
+        form.append("simulation_requirement", "Run a social prediction simulation with the named voter groups, candidates, media, unions, activists, polling agencies, and local business owners as agents. Estimate the probability that Alice Morgan wins. The final report must include numeric YES probability and confidence_score.");
         form.append("project_name", `polybot-${seed.marketId}-${Date.now()}`);
         const res = await this.post("/api/graph/ontology/generate", form, {
             headers: {}
@@ -250,52 +256,78 @@ class MiroFishClient {
         while (Date.now() < deadline) {
             const res = await this.get(`/api/simulation/${simulationId}/run-status`);
             last = res.data;
-            const status = normalizeStatus(res.data);
-            if (status === "completed" || status === "stopped" || status === "ready")
-                return { status, raw: res.data };
-            if (status === "failed" || status === "error")
+            const payload = res.data ?? {};
+            const data = payload.data ?? payload;
+            const runnerStatus = String(data.runner_status ?? "").toLowerCase();
+            const status = String(data.status ?? payload.status ?? "").toLowerCase();
+            const progressPercent = Number(data.progress_percent ?? data.progress ?? 0);
+            const twitterCompleted = data.twitter_completed === true;
+            const redditCompleted = data.reddit_completed === true;
+            const err = data.error ?? payload.error;
+            if (err !== null && err !== undefined && String(err).trim() !== "") {
                 throw new Error(`simulation failed: ${stringifyCompact(res.data)}`);
+            }
+            if (["failed", "error"].includes(runnerStatus) || ["failed", "error"].includes(status)) {
+                throw new Error(`simulation failed: ${stringifyCompact(res.data)}`);
+            }
+            if (runnerStatus === "completed" ||
+                status === "completed" ||
+                progressPercent >= 100 ||
+                (twitterCompleted && redditCompleted)) {
+                return { status: "completed", raw: res.data };
+            }
             await (0, rateLimit_1.sleep)(config_1.config.MIROFISH_POLL_INTERVAL_MS);
         }
         throw new Error(`simulation timeout. last=${stringifyCompact(last)}`);
     }
     async generateReport(simulationId) {
         const res = await this.post("/api/report/generate", {
-            simulation_id: simulationId,
-            force_regenerate: false
+            simulation_id: simulationId
         });
-        const taskId = extractId(res.data, ["task_id", "taskId", "id", "data.task_id"]);
+        const taskId = extractId(res.data, ["data.task_id", "task_id", "taskId", "id"]);
+        const reportId = extractId(res.data, ["data.report_id", "report_id", "reportId", "id"]);
         if (!taskId)
             throw new Error("generateReport failed: task_id missing");
-        return { taskId, raw: res.data };
+        return { taskId, reportId: reportId ?? "", raw: res.data };
     }
-    async waitReport(taskId, simulationId) {
+    async waitReport(taskId, simulationId, fallbackReportId) {
         const deadline = Date.now() + config_1.config.MIROFISH_REPORT_TIMEOUT_MS;
-        let last;
+        let lastStatus;
+        let lastBySimulation;
+        let foundReportId = fallbackReportId ?? "";
         while (Date.now() < deadline) {
-            let data;
+            let statusData;
             try {
-                data = (await this.post("/api/report/generate/status", {
+                statusData = (await this.post("/api/report/generate/status", {
                     task_id: taskId,
                     simulation_id: simulationId
                 })).data;
             }
             catch {
-                data = (await this.get(`/api/report/generate/status?report_id=${encodeURIComponent(taskId)}`)).data;
+                statusData = (await this.get(`/api/report/generate/status?report_id=${encodeURIComponent(taskId)}`)).data;
             }
-            last = data;
-            const status = normalizeStatus(data);
-            if (status === "completed" || status === "ready") {
-                const reportId = extractId(data, ["report_id", "reportId", "data.report_id", "result.report_id", "id"]);
-                if (!reportId)
-                    throw new Error(`waitReport completed but report_id missing: ${stringifyCompact(data)}`);
-                return { reportId, raw: data };
+            lastStatus = statusData;
+            foundReportId =
+                extractId(statusData, ["data.report_id", "report_id", "reportId", "result.report_id", "id"]) ??
+                    foundReportId;
+            const bySim = await this.fetchReportBySimulation(simulationId);
+            lastBySimulation = bySim.raw;
+            const hasMarkdown = Boolean(readPath(bySim.raw, "data.markdown_content") || readPath(bySim.raw, "markdown_content"));
+            const hasSummary = Boolean(readPath(bySim.raw, "data.outline.summary") || readPath(bySim.raw, "outline.summary"));
+            const status = normalizeStatus(statusData);
+            if (hasMarkdown || hasSummary || status === "completed" || status === "ready") {
+                return {
+                    reportId: foundReportId || "by-simulation",
+                    rawStatus: statusData,
+                    rawBySimulation: bySim.raw,
+                    report: bySim
+                };
             }
             if (status === "failed" || status === "error")
-                throw new Error(`report failed: ${stringifyCompact(data)}`);
+                throw new Error(`report failed: ${stringifyCompact(statusData)}`);
             await (0, rateLimit_1.sleep)(config_1.config.MIROFISH_POLL_INTERVAL_MS);
         }
-        throw new Error(`report timeout. last=${stringifyCompact(last)}`);
+        throw new Error(`report timeout. lastStatus=${stringifyCompact(lastStatus)} lastBySimulation=${stringifyCompact(lastBySimulation)}`);
     }
     async fetchReport(reportId) {
         const res = await this.get(`/api/report/${reportId}`);
@@ -307,43 +339,39 @@ class MiroFishClient {
             stringifyCompact(res.data);
         return { reportText: String(reportText ?? ""), raw: res.data };
     }
+    async fetchReportBySimulation(simulationId) {
+        const res = await this.get(`/api/report/by-simulation/${simulationId}`);
+        const reportText = readPath(res.data, "data.markdown_content") ??
+            readPath(res.data, "markdown_content") ??
+            readPath(res.data, "data.outline.summary") ??
+            readPath(res.data, "outline.summary") ??
+            stringifyCompact(res.data);
+        return { reportText: String(reportText ?? ""), raw: res.data };
+    }
     parseProbabilityFromReport(report) {
-        const text = report.reportText ?? "";
-        const patterns = [
-            /YES probability\s*:\s*(\d+(?:\.\d+)?)\s*%/i,
-            /yes_probability\s*:\s*(\d+(?:\.\d+)?)/i,
-            /probability\s*:\s*(\d+(?:\.\d+)?)\s*%/i,
-            /probability\s*:\s*(0?\.\d+)/i,
-            /resolves YES\s*:\s*(\d+(?:\.\d+)?)\s*%/i
+        const markdown = String(readPath(report.raw, "data.markdown_content") ?? readPath(report.raw, "markdown_content") ?? "");
+        const summary = String(readPath(report.raw, "data.outline.summary") ?? readPath(report.raw, "outline.summary") ?? "");
+        const textSources = [
+            { source: "markdown_content", text: markdown || report.reportText || "" },
+            { source: "outline.summary", text: summary }
         ];
-        let probability;
-        for (const p of patterns) {
-            const m = text.match(p);
-            if (m?.[1]) {
-                const n = Number(m[1]);
-                probability = n > 1 ? n / 100 : n;
-                break;
+        for (const src of textSources) {
+            if (!src.text.trim())
+                continue;
+            const parsed = parseProbabilityAndConfidence(src.text);
+            if (parsed.probability !== undefined) {
+                const rawProbability = clamp(parsed.probability, 0, 1);
+                const rawConfidenceScore = clamp(parsed.confidence ?? rawProbability * 100, 0, 100);
+                return {
+                    ok: true,
+                    rawConfidenceScore,
+                    rawProbability,
+                    reportText: src.text,
+                    source: src.source
+                };
             }
         }
-        const confPatterns = [
-            /confidence_score\s*:\s*(\d+(?:\.\d+)?)\s*%?/i,
-            /Confidence Score\s*:\s*(\d+(?:\.\d+)?)\s*%?/i
-        ];
-        let confidence;
-        for (const p of confPatterns) {
-            const m = text.match(p);
-            if (m?.[1]) {
-                const n = Number(m[1]);
-                confidence = n > 1 ? n : n * 100;
-                break;
-            }
-        }
-        if (!Number.isFinite(probability)) {
-            return { ok: false, error: "Could not parse numeric probability from report", reportText: text };
-        }
-        const rawProbability = clamp(probability, 0, 1);
-        const rawConfidenceScore = clamp(confidence ?? rawProbability * 100, 0, 100);
-        return { ok: true, rawConfidenceScore, rawProbability, reportText: text };
+        return { ok: false, error: "Could not parse numeric probability from report", reportText: markdown || summary || report.reportText || "" };
     }
     async fetchGraphIdFromProject(projectId) {
         try {
@@ -444,6 +472,40 @@ function stringifyCompact(v) {
 }
 function clamp(n, min, max) {
     return Math.min(max, Math.max(min, n));
+}
+function parseProbabilityAndConfidence(text) {
+    const probPatterns = [
+        /YES probability of\s*(0?\.\d+)/i,
+        /YES probability\s*:\s*(0?\.\d+)/i,
+        /YES probability\s*:\s*(\d+(?:\.\d+)?)\s*%/i,
+        /YES probability of\s*(\d+(?:\.\d+)?)\s*%/i,
+        /YES概率为\s*(0?\.\d+)/i
+    ];
+    const confPatterns = [
+        /confidence score of\s*(0?\.\d+)/i,
+        /confidence_score\s*:\s*(0?\.\d+)/i,
+        /confidence score\s*:\s*(\d+(?:\.\d+)?)\s*%/i,
+        /置信度得分为\s*(0?\.\d+)/i
+    ];
+    let probability;
+    for (const p of probPatterns) {
+        const m = text.match(p);
+        if (m?.[1]) {
+            const n = Number(m[1]);
+            probability = n > 1 ? n / 100 : n;
+            break;
+        }
+    }
+    let confidence;
+    for (const p of confPatterns) {
+        const m = text.match(p);
+        if (m?.[1]) {
+            const n = Number(m[1]);
+            confidence = n > 1 ? n : n * 100;
+            break;
+        }
+    }
+    return { probability, confidence };
 }
 function inspectPrepareFailure(data) {
     const status = normalizeStatus(data);

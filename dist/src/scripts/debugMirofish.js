@@ -10,18 +10,37 @@ void (async () => {
     console.log(JSON.stringify(health, null, 2));
     const syntheticSeed = validation_1.seedPacketSchema.parse({
         marketId: "debug-test",
-        question: "Will a coin flip land heads?",
-        bull_case: "A fair coin has a 50% chance of heads.",
-        bear_case: "A fair coin has a 50% chance of tails.",
-        current_odds: 0.5,
-        best_bid: 0.49,
-        best_ask: 0.51,
+        question: "Will Candidate Alice win the 2028 Metro City mayoral election?",
+        bull_case: "Alice benefits from incumbency, older voters, and business support.",
+        bear_case: "Brian Lee is gaining among youth voters and housing activists.",
+        current_odds: 0.54,
+        best_bid: 0.53,
+        best_ask: 0.55,
         spread: 0.02,
-        key_entities: ["coin flip"],
+        key_entities: [
+            "Alice Morgan",
+            "Brian Lee",
+            "Metro City Election Commission",
+            "Youth voters",
+            "Senior voters",
+            "Local business owners",
+            "Public transit unions",
+            "Housing activists",
+            "Local newspapers",
+            "Polling agencies"
+        ],
         resolution_date: "2099-01-01",
-        resolution_rules: ["Synthetic debug market, not real."],
-        evidence_summary: "No external evidence.",
-        uncertainty_factors: ["Random event"]
+        resolution_rules: [
+            "Synthetic debug market, not real.",
+            "Resolve YES if Alice Morgan wins the 2028 Metro City mayoral election."
+        ],
+        evidence_summary: "Alice has strong name recognition and incumbent advantage. Brian Lee has momentum among younger voters. Housing affordability and transit reliability are major issues. Local business owners are split. Recent polling is mixed.",
+        uncertainty_factors: [
+            "turnout",
+            "late scandals",
+            "polling error",
+            "endorsements"
+        ]
     });
     const result = await client.predict(syntheticSeed, {
         agents: 5,
@@ -41,6 +60,12 @@ void (async () => {
         console.log(`prepare task: ${wf.prepareTaskId ?? "-"}`);
         console.log(`report task: ${wf.reportTaskId ?? "-"}`);
         console.log(`report_id: ${wf.reportId ?? "-"}`);
+        console.log("final run-status:");
+        console.log(JSON.stringify(wf.finalRunStatusRaw ?? {}, null, 2));
+        console.log("report generate raw response:");
+        console.log(JSON.stringify(wf.reportGenerateRaw ?? {}, null, 2));
+        console.log("report status raw response:");
+        console.log(JSON.stringify(wf.reportStatusRaw ?? {}, null, 2));
     }
     if (!result.ok || !result.result) {
         console.log("\nParsed probability: FAILED (graceful)");
@@ -60,6 +85,7 @@ void (async () => {
     console.log(JSON.stringify({
         marketId: result.result.marketId,
         rawConfidenceScore: result.result.rawConfidenceScore,
-        rawProbability: result.result.rawProbability
+        rawProbability: result.result.rawProbability,
+        parseSource: result.result.modelMetadata?.parseSource ?? "-"
     }, null, 2));
 })();
