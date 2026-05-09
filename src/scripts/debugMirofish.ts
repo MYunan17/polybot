@@ -72,6 +72,8 @@ void (async () => {
     console.log(JSON.stringify(wf.reportGenerateRaw ?? {}, null, 2));
     console.log("report status raw response:");
     console.log(JSON.stringify(wf.reportStatusRaw ?? {}, null, 2));
+    console.log(`parseAttemptSource: ${wf.parseAttemptSource ?? "-"}`);
+    console.log(`numericProbabilityFound: ${wf.numericProbabilityFound === true ? "true" : "false"}`);
   }
 
   if (!result.ok || !result.result) {
@@ -85,6 +87,15 @@ void (async () => {
     if (rawPrepareStatus) {
       console.log("Raw prepare status:");
       console.log(JSON.stringify(rawPrepareStatus, null, 2));
+    }
+    const rawReportStatus = (result.raw as any)?.rawReportStatus;
+    if (rawReportStatus) {
+      console.log("Latest report status raw:");
+      console.log(JSON.stringify(rawReportStatus, null, 2));
+    }
+    const parseAttemptSource = (result.raw as any)?.parseAttemptSource;
+    if (parseAttemptSource) {
+      console.log(`parseAttemptSource: ${parseAttemptSource}`);
     }
     process.exit(0);
   }

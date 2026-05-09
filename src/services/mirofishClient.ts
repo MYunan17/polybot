@@ -50,6 +50,8 @@ interface WorkflowContext {
   reportStatusRaw?: unknown;
   reportBySimulationRaw?: unknown;
   parseSource?: "markdown_content" | "outline.summary";
+  parseAttemptSource?: "markdown_content" | "outline.summary";
+  numericProbabilityFound?: boolean;
 }
 
 class WorkflowStepError extends Error {
@@ -139,6 +141,8 @@ export class MiroFishClient {
       wf.reportId = reportDone.reportId;
       wf.reportStatusRaw = reportDone.rawStatus;
       wf.reportBySimulationRaw = reportDone.rawBySimulation;
+      wf.parseAttemptSource = reportDone.parseAttemptSource;
+      wf.numericProbabilityFound = reportDone.numericProbabilityFound;
 
       const report = reportDone.report ?? (await this.fetchReportBySimulation(wf.simulationId));
       const parsed = this.parseProbabilityFromReport(report);
@@ -354,7 +358,14 @@ export class MiroFishClient {
     return { taskId, reportId: reportId ?? "", raw: res.data };
   }
 
-  async waitReport(taskId: string, simulationId: string, fallbackReportId?: string): Promise<{ reportId: string; rawStatus: unknown; rawBySimulation: unknown; report?: { reportText: string; raw: unknown } }> {
+  async waitReport(taskId: string, simulationId: string, fallbackReportId?: string): Promise<{
+    reportId: string;
+    rawStatus: unknown;
+    rawBySimulation: unknown;
+    report?: { reportText: string; raw: unknown };
+    parseAttemptSource?: "markdown_content" | "outline.summary";
+    numericProbabilityFound: boolean;
+  }> {
     const deadline = Date.now() + config.MIROFISH_REPORT_TIMEOUT_MS;
     let lastStatus: unknown;
     let lastBySimulation: unknown;
@@ -375,18 +386,49 @@ export class MiroFishClient {
         foundReportId;
       const bySim = await this.fetchReportBySimulation(simulationId);
       lastBySimulation = bySim.raw;
-      const hasMarkdown = Boolean(readPath(bySim.raw, "data.markdown_content") || readPath(bySim.raw, "markdown_content"));
-      const hasSummary = Boolean(readPath(bySim.raw, "data.outline.summary") || readPath(bySim.raw, "outline.summary"));
+      const markdown = String(readPath(bySim.raw, "data.markdown_content") ?? readPath(bySim.raw, "markdown_content") ?? "");
+      const summary = String(readPath(bySim.raw, "data.outline.summary") ?? readPath(bySim.raw, "outline.summary") ?? "");
       const status = normalizeStatus(statusData);
-      if (hasMarkdown || hasSummary || status === "completed" || status === "ready") {
+      const parseAttempt = attemptParseFromCandidates(markdown, summary);
+      if (parseAttempt.found) {
         return {
           reportId: foundReportId || "by-simulation",
           rawStatus: statusData,
           rawBySimulation: bySim.raw,
-          report: bySim
+          report: bySim,
+          parseAttemptSource: parseAttempt.source,
+          numericProbabilityFound: true
         };
       }
-      if (status === "failed" || status === "error") throw new Error(`report failed: ${stringifyCompact(statusData)}`);
+      if (status === "failed" || status === "error") {
+        throw new WorkflowStepError(
+          {
+            step: "waitReport",
+            simulationId,
+            taskId,
+            status,
+            error: "Report generation failed",
+            rawReportStatus: statusData
+          },
+          `report failed: ${stringifyCompact(statusData)}`
+        );
+      }
+      if (status === "completed" || status === "ready") {
+        const preview = `${markdown}\n${summary}`.slice(0, 500);
+        throw new WorkflowStepError(
+          {
+            step: "waitReport",
+            simulationId,
+            taskId,
+            status,
+            error: "Report completed but numeric probability missing",
+            reportTextPreview: preview,
+            rawReportStatus: statusData,
+            rawReportBySimulation: bySim.raw
+          },
+          "Could not parse numeric probability from completed report"
+        );
+      }
       await sleep(config.MIROFISH_POLL_INTERVAL_MS);
     }
     throw new Error(`report timeout. lastStatus=${stringifyCompact(lastStatus)} lastBySimulation=${stringifyCompact(lastBySimulation)}`);
@@ -560,13 +602,18 @@ function parseProbabilityAndConfidence(text: string): { probability?: number; co
     /YES probability\s*:\s*(0?\.\d+)/i,
     /YES probability\s*:\s*(\d+(?:\.\d+)?)\s*%/i,
     /YES probability of\s*(\d+(?:\.\d+)?)\s*%/i,
-    /YES概率为\s*(0?\.\d+)/i
+    /YES概率为\s*(0?\.\d+)/i,
+    /YES概率为\s*(\d+(?:\.\d+)?)\s*%/i,
+    /胜选概率为\s*(0?\.\d+)/i,
+    /胜选概率较高.*?(\d+(?:\.\d+)?%)/i,
+    /概率为\s*(0?\.\d+)/i
   ];
   const confPatterns = [
     /confidence score of\s*(0?\.\d+)/i,
     /confidence_score\s*:\s*(0?\.\d+)/i,
     /confidence score\s*:\s*(\d+(?:\.\d+)?)\s*%/i,
-    /置信度得分为\s*(0?\.\d+)/i
+    /置信度得分为\s*(0?\.\d+)/i,
+    /置信度为\s*(0?\.\d+)/i
   ];
 
   let probability: number | undefined;
@@ -588,6 +635,31 @@ function parseProbabilityAndConfidence(text: string): { probability?: number; co
     }
   }
   return { probability, confidence };
+}
+
+function attemptParseFromCandidates(markdown: string, summary: string): {
+  found: boolean;
+  source?: "markdown_content" | "outline.summary";
+  probability?: number;
+  confidence?: number;
+} {
+  const candidates: Array<{ source: "markdown_content" | "outline.summary"; text: string }> = [
+    { source: "markdown_content", text: markdown },
+    { source: "outline.summary", text: summary }
+  ];
+  for (const c of candidates) {
+    if (!c.text.trim()) continue;
+    const parsed = parseProbabilityAndConfidence(c.text);
+    if (parsed.probability !== undefined) {
+      return {
+        found: true,
+        source: c.source,
+        probability: parsed.probability,
+        confidence: parsed.confidence
+      };
+    }
+  }
+  return { found: false };
 }
 
 function inspectPrepareFailure(data: unknown): {
