@@ -109,21 +109,21 @@ void (async () => {
 
   try {
     logger.info("Starting Phase 2 seed");
-    await runPhase2Seed();
+    await runPhase2Seed({ suppressTelegram: true });
   } catch (err) {
     await failure("Phase 2 seed", err);
   }
 
   try {
     logger.info("Starting Phase 3 MiroFish");
-    phase3Summary = await runPhase3Mirofish();
+    phase3Summary = await runPhase3Mirofish({ suppressTelegram: true });
   } catch (err) {
     await failure("Phase 3 MiroFish", err);
   }
 
   try {
     logger.info("Starting Phase 4 paper");
-    phase4Summary = await runPhase4Paper();
+    phase4Summary = await runPhase4Paper({ suppressTelegram: true });
   } catch (err) {
     await failure("Phase 4 paper", err);
   }

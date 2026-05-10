@@ -13,7 +13,11 @@ export interface PaperSummary {
   skipped: number;
 }
 
-export async function runPhase4Paper(): Promise<PaperSummary> {
+export interface PaperOptions {
+  suppressTelegram?: boolean;
+}
+
+export async function runPhase4Paper(_options?: PaperOptions): Promise<PaperSummary> {
   await initDb();
   const runId = randomUUID();
   const store = new SqliteStore();

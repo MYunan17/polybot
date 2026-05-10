@@ -18,11 +18,17 @@ export interface Phase3Summary {
   topConfidence: string;
 }
 
-export async function runPhase3Mirofish(): Promise<Phase3Summary> {
+export interface Phase3Options {
+  suppressTelegram?: boolean;
+}
+
+export async function runPhase3Mirofish(options?: Phase3Options): Promise<Phase3Summary> {
   await initDb();
   const runId = randomUUID();
   const store = new SqliteStore();
   const telegram = new TelegramClient();
+  const suppressTelegram = options?.suppressTelegram ?? process.env.SUPPRESS_PHASE_TELEGRAM === "true";
+  const telegramEnabled = telegram.enabled && !suppressTelegram;
   const client = new MiroFishClient();
   const swarm = new MiroFishSwarmAgent(client);
 
@@ -73,7 +79,7 @@ export async function runPhase3Mirofish(): Promise<Phase3Summary> {
           { status: "dry_run", message: "No execution in Phase 3" },
           true
         );
-        if (config.TELEGRAM_VERBOSE) {
+        if (config.TELEGRAM_VERBOSE && telegramEnabled) {
           await telegram.sendText(`MIROFISH FAIL\nMarket: ${seed.question}\nReason: ${response.error ?? "unknown"}`);
         }
         continue;
@@ -119,7 +125,7 @@ export async function runPhase3Mirofish(): Promise<Phase3Summary> {
         { status: "dry_run", message: "No execution in Phase 3" },
         true
       );
-      if (config.TELEGRAM_VERBOSE) {
+      if (config.TELEGRAM_VERBOSE && telegramEnabled) {
         await telegram.sendText(
           `MIROFISH OK\nMarket: ${seed.question}\nConfidence: ${response.result.rawConfidenceScore.toFixed(1)}%\nProbability: ${(response.result.rawProbability * 100).toFixed(1)}%`
         );
@@ -149,22 +155,24 @@ export async function runPhase3Mirofish(): Promise<Phase3Summary> {
     .map((t, i) => `${i + 1}. ${t.marketId} conf=${t.confidence.toFixed(1)}% prob=${(t.probability * 100).toFixed(1)}%`)
     .join("\n");
 
-  await telegram.sendText(
-    [
-      "Phase 3 Summary (MiroFish Prediction-Only)",
-      `Run ID: ${runId}`,
-      `MiroFish health: ${healthOk ? "ok" : "unreachable"}`,
-      `Detected route: ${health.detectedRoute ?? "-"}`,
-      `Health message: ${health.message}`,
-      `Seed packets considered: ${seedRecords.length}`,
-      `MiroFish success: ${successCount}`,
-      `MiroFish failure: ${failCount}`,
-      `Average raw probability: ${(avgProb * 100).toFixed(2)}%`,
-      "Top 3 confidence predictions:",
-      top3 || "-",
-      "Execution: not performed"
-    ].join("\n")
-  );
+  if (telegramEnabled) {
+    await telegram.sendText(
+      [
+        "Phase 3 Summary (MiroFish Prediction-Only)",
+        `Run ID: ${runId}`,
+        `MiroFish health: ${healthOk ? "ok" : "unreachable"}`,
+        `Detected route: ${health.detectedRoute ?? "-"}`,
+        `Health message: ${health.message}`,
+        `Seed packets considered: ${seedRecords.length}`,
+        `MiroFish success: ${successCount}`,
+        `MiroFish failure: ${failCount}`,
+        `Average raw probability: ${(avgProb * 100).toFixed(2)}%`,
+        "Top 3 confidence predictions:",
+        top3 || "-",
+        "Execution: not performed"
+      ].join("\n")
+    );
+  }
 
   logger.info(
     {

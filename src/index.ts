@@ -14,7 +14,11 @@ import { BullBearAgent } from "./agents/bullBearAgent";
 import { TelegramClient } from "./services/telegramClient";
 import { evidencePacketSchema, rulesAnalysisSchema, seedPacketSchema } from "./utils/validation";
 
-export async function runPhase2Seed(): Promise<void> {
+export interface Phase2Options {
+  suppressTelegram?: boolean;
+}
+
+export async function runPhase2Seed(options?: Phase2Options): Promise<void> {
   await initDb();
   const runId = randomUUID();
   const store = new SqliteStore();
@@ -28,6 +32,8 @@ export async function runPhase2Seed(): Promise<void> {
   const rules = new RulesResolutionAgent();
   const bullBear = new BullBearAgent();
   const telegram = new TelegramClient();
+  const suppressTelegram = options?.suppressTelegram ?? process.env.SUPPRESS_PHASE_TELEGRAM === "true";
+  const telegramEnabled = telegram.enabled && !suppressTelegram;
 
   const markets = await scanner.run();
   const selected = markets.slice(0, config.MAX_CANDIDATES_FOR_LIGHT_AI);
@@ -40,7 +46,7 @@ export async function runPhase2Seed(): Promise<void> {
       const ra = rulesAnalysisSchema.parse(await rules.run(market));
       if (ra.ambiguityScore > 0.6 || ra.resolutionRisk === "high") {
         skippedAmbiguity += 1;
-        if (config.TELEGRAM_VERBOSE) {
+        if (config.TELEGRAM_VERBOSE && telegramEnabled) {
           await telegram.sendText(
             `SKIP ambiguity\nMarket: ${market.question}\nRisk: ${ra.resolutionRisk}\nReason: ${ra.skipReason ?? "-"}`
           );
@@ -71,7 +77,7 @@ export async function runPhase2Seed(): Promise<void> {
       );
       seeded += 1;
 
-      if (config.TELEGRAM_VERBOSE) {
+      if (config.TELEGRAM_VERBOSE && telegramEnabled) {
         await telegram.sendText(
           `SEEDED\nMarket: ${market.question}\nEntities: ${ev.keyEntities.slice(0, 5).join(", ")}\nNews: ${ev.newsItems.length}`
         );
@@ -82,18 +88,20 @@ export async function runPhase2Seed(): Promise<void> {
     }
   }
 
-  await telegram.sendText(
-    [
-      "Phase 2 Summary",
-      `Run ID: ${runId}`,
-      `Markets scanned: ${markets.length}`,
-      `Markets considered: ${selected.length}`,
-      `Markets seeded: ${seeded}`,
-      `Skipped for ambiguity: ${skippedAmbiguity}`,
-      `Errors: ${errors}`,
-      "Execution: disabled (dry-run seed-only)"
-    ].join("\n")
-  );
+  if (telegramEnabled) {
+    await telegram.sendText(
+      [
+        "Phase 2 Summary",
+        `Run ID: ${runId}`,
+        `Markets scanned: ${markets.length}`,
+        `Markets considered: ${selected.length}`,
+        `Markets seeded: ${seeded}`,
+        `Skipped for ambiguity: ${skippedAmbiguity}`,
+        `Errors: ${errors}`,
+        "Execution: disabled (dry-run seed-only)"
+      ].join("\n")
+    );
+  }
 
   logger.info(
     {
