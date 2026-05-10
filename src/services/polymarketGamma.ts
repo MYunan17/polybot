@@ -7,7 +7,15 @@ const GAMMA_URL = "https://gamma-api.polymarket.com/markets";
 
 export class PolymarketGammaService {
   async fetchMarkets(): Promise<ScannedMarket[]> {
-    const res = await axios.get(GAMMA_URL, { timeout: 10000 });
+    const fetchLimit = Math.max(config.MAX_MARKETS_PER_RUN * 3, 200);
+    const res = await axios.get(GAMMA_URL, {
+      timeout: 10000,
+      params: {
+        limit: fetchLimit,
+        active: true,
+        closed: false
+      }
+    });
     const rows = Array.isArray(res.data) ? res.data : [];
     const out: ScannedMarket[] = [];
     for (const m of rows) {
