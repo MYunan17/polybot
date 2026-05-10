@@ -493,7 +493,9 @@ export class MiroFishClient {
       const parsed = parseProbabilityAndConfidence(src.text);
       if (parsed.probability !== undefined) {
         const rawProbability = clamp(parsed.probability, 0, 1);
-        const rawConfidenceScore = clamp(parsed.confidence ?? rawProbability * 100, 0, 100);
+        const rawConfidenceScore = parsed.confidence !== undefined
+          ? clamp(parsed.confidence * 100, 0, 100)
+          : 50;
         return {
           ok: true,
           rawConfidenceScore,
@@ -637,12 +639,12 @@ function parseProbabilityAndConfidence(text: string): { probability?: number; co
     { re: /概率为\s*(0?\.\d+)/i, percentContext: false }
   ];
   const confPatterns: Array<{ re: RegExp; percentContext: boolean }> = [
-    { re: /confidence score of\s*(0?\.\d+)/i, percentContext: false },
     { re: /confidence_score[^0-9]{0,30}([0-9]+(?:\.[0-9]+)?%?)/i, percentContext: true },
-    { re: /confidence score\s*:\s*(\d+(?:\.\d+)?)\s*%/i, percentContext: true },
-    { re: /置信度得分为\s*(0?\.\d+)/i, percentContext: false },
-    { re: /置信度为\s*(0?\.\d+)/i, percentContext: false },
-    { re: /置信度评分[^0-9]{0,30}([0-9]+(?:\.[0-9]+)?%?)/i, percentContext: true }
+    { re: /confidence score[^0-9]{0,30}([0-9]+(?:\.[0-9]+)?%?)/i, percentContext: true },
+    { re: /\bconfidence\b[^0-9]{0,30}([0-9]+(?:\.[0-9]+)?%?)/i, percentContext: true },
+    { re: /置信度评分[^0-9]{0,30}([0-9]+(?:\.[0-9]+)?%?)/i, percentContext: true },
+    { re: /置信度得分[^0-9]{0,30}([0-9]+(?:\.[0-9]+)?%?)/i, percentContext: true },
+    { re: /置信度[^0-9]{0,30}([0-9]+(?:\.[0-9]+)?%?)/i, percentContext: true }
   ];
 
   let probability: number | undefined;
@@ -657,8 +659,7 @@ function parseProbabilityAndConfidence(text: string): { probability?: number; co
   for (const p of confPatterns) {
     const m = text.match(p.re);
     if (m?.[1]) {
-      const norm = normalizeCapturedNumber(m[1], p.percentContext);
-      confidence = norm > 1 ? norm : norm * 100;
+      confidence = normalizeCapturedNumber(m[1], p.percentContext);
       break;
     }
   }
@@ -681,12 +682,12 @@ function attemptParseFromCandidates(markdown: string, summary: string): {
     const parsed = parseProbabilityAndConfidence(c.text);
     if (parsed.probability !== undefined && Number.isFinite(parsed.probability)) {
       const rp = clamp(parsed.probability, 0, 1);
-      const rc = clamp(parsed.confidence ?? rp * 100, 0, 100);
+      const rc = parsed.confidence !== undefined ? clamp(parsed.confidence * 100, 0, 100) : 50;
       return {
         found: true,
         source: c.source,
         probability: rp,
-        confidence: rc,
+        confidence: parsed.confidence,
         parsed: {
           ok: true,
           rawConfidenceScore: rc,
@@ -705,7 +706,8 @@ function normalizeCapturedNumber(raw: string, percentContext: boolean): number {
   const hasPercent = cleaned.includes("%");
   const n = Number(cleaned.replace("%", ""));
   if (!Number.isFinite(n)) return NaN;
-  if (hasPercent || percentContext) return n / 100;
+  if (hasPercent) return n / 100;
+  if (percentContext && n > 1) return n / 100;
   return n;
 }
 

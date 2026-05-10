@@ -4,6 +4,24 @@ import { config } from "../config";
 
 void (async () => {
   const client = new MiroFishClient();
+  const parserCase1 = client.parseProbabilityFromReport({
+    reportText: "",
+    raw: { data: { outline: { summary: "胜选概率为54%" } } }
+  });
+  const parserCase2 = client.parseProbabilityFromReport({
+    reportText: "",
+    raw: { data: { outline: { summary: "YES probability 72%, confidence_score 0.81" } } }
+  });
+  console.log("Parser checks:");
+  console.log(JSON.stringify({
+    case1: parserCase1.ok
+      ? { probability: parserCase1.rawProbability, confidenceScore: parserCase1.rawConfidenceScore, source: parserCase1.source }
+      : { error: parserCase1.error },
+    case2: parserCase2.ok
+      ? { probability: parserCase2.rawProbability, confidenceScore: parserCase2.rawConfidenceScore, source: parserCase2.source }
+      : { error: parserCase2.error }
+  }, null, 2));
+
   const health = await client.healthCheck();
   console.log("Health check:");
   console.log(JSON.stringify(health, null, 2));
