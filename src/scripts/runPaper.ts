@@ -42,11 +42,36 @@ export async function runPhase4Paper(_options?: PaperOptions): Promise<PaperSumm
 
   let simulated = 0;
   let skipped = 0;
+  let duplicateOpenSkipped = 0;
 
   for (const p of preds) {
     try {
       if (!p.seed) {
         skipped += 1;
+        continue;
+      }
+      const hasOpenTrade = await store.hasOpenPaperTrade(p.marketId);
+      if (hasOpenTrade) {
+        duplicateOpenSkipped += 1;
+        skipped += 1;
+        await store.insertDecision(
+          runId,
+          p.marketId,
+          {
+            marketId: p.marketId,
+            action: "SKIP",
+            adjustedProbability: p.rawProbability,
+            executablePrice: p.seed.best_ask ?? p.seed.current_odds,
+            marketProbability: p.seed.current_odds,
+            edge: 0,
+            spread: p.seed.spread ?? 0,
+            reason: "Existing open paper trade for market",
+            confidence: "low"
+          },
+          { approved: false, reason: "Existing open paper trade for market" },
+          { status: "dry_run", message: "Paper mode only; no execution performed" },
+          true
+        );
         continue;
       }
       const calibrated = await calibration.run(p.marketId, p.rawProbability);
@@ -123,6 +148,7 @@ export async function runPhase4Paper(_options?: PaperOptions): Promise<PaperSumm
       considered: preds.length,
       simulated,
       skipped,
+      duplicateOpenSkipped,
       note: "No execution/OpenClaw/private keys used"
     },
     "Paper run completed"

@@ -39,6 +39,15 @@ export class SqliteStore {
     );
   }
 
+  async hasOpenPaperTrade(marketId: string): Promise<boolean> {
+    const db = await getDb();
+    const row = await db.get<{ count: number }>(
+      `SELECT COUNT(*) as count FROM paper_trades WHERE market_id = ? AND status = 'paper_open'`,
+      marketId
+    );
+    return (row?.count ?? 0) > 0;
+  }
+
   async getMarketSnapshot(marketId: string): Promise<Partial<ScannedMarket> | null> {
     const db = await getDb();
     const row = await db.get<{
