@@ -52,6 +52,7 @@ interface WorkflowContext {
   parseSource?: "markdown_content" | "outline.summary";
   parseAttemptSource?: "markdown_content" | "outline.summary";
   numericProbabilityFound?: boolean;
+  reportReadyReason?: string;
 }
 
 class WorkflowStepError extends Error {
@@ -143,16 +144,11 @@ export class MiroFishClient {
       wf.reportBySimulationRaw = reportDone.rawBySimulation;
       wf.parseAttemptSource = reportDone.parseAttemptSource;
       wf.numericProbabilityFound = reportDone.numericProbabilityFound;
+      wf.reportReadyReason = reportDone.readyReason;
 
       const report = reportDone.report ?? (await this.fetchReportBySimulation(wf.simulationId));
-      const parsed = this.parseProbabilityFromReport(report);
-      if (!parsed.ok) {
-        return {
-          ok: false,
-          error: parsed.error,
-          raw: { workflow: wf, report }
-        };
-      }
+      const parsed = reportDone.parsed ?? this.parseProbabilityFromReport(report);
+      if (!parsed.ok) return { ok: false, error: parsed.error, raw: { workflow: wf, report } };
       return {
         ok: true,
         result: {
@@ -365,6 +361,8 @@ export class MiroFishClient {
     report?: { reportText: string; raw: unknown };
     parseAttemptSource?: "markdown_content" | "outline.summary";
     numericProbabilityFound: boolean;
+    parsed?: ReturnType<MiroFishClient["parseProbabilityFromReport"]>;
+    readyReason?: string;
   }> {
     const deadline = Date.now() + config.MIROFISH_REPORT_TIMEOUT_MS;
     let lastStatus: unknown;
@@ -384,50 +382,76 @@ export class MiroFishClient {
       foundReportId =
         extractId(statusData, ["data.report_id", "report_id", "reportId", "result.report_id", "id"]) ??
         foundReportId;
-      const bySim = await this.fetchReportBySimulation(simulationId);
-      lastBySimulation = bySim.raw;
-      const markdown = String(readPath(bySim.raw, "data.markdown_content") ?? readPath(bySim.raw, "markdown_content") ?? "");
-      const summary = String(readPath(bySim.raw, "data.outline.summary") ?? readPath(bySim.raw, "outline.summary") ?? "");
-      const status = normalizeStatus(statusData);
+      const bySimResponse = await this.get(`/api/report/by-simulation/${simulationId}`);
+      const bySimPayload: any = bySimResponse.data;
+      const report: any = bySimPayload?.data ?? bySimPayload ?? {};
+      lastBySimulation = bySimPayload;
+
+      const markdown = String(report.markdown_content ?? "");
+      const summary = String(report.outline?.summary ?? "");
+      const bySimStatus = String(report.status ?? "").toLowerCase();
+      const completedAt = report.completed_at;
+
+      const reportStatusData = (statusData?.data ?? statusData ?? {}) as any;
+      const reportStatus = String(reportStatusData.status ?? "").toLowerCase();
+      const reportProgress = Number(reportStatusData.progress ?? 0);
+      const alreadyCompleted = reportStatusData.already_completed === true;
+
+      const completed =
+        bySimStatus === "completed" ||
+        Boolean(completedAt) ||
+        reportStatus === "completed" ||
+        reportProgress >= 100 ||
+        alreadyCompleted;
+
       const parseAttempt = attemptParseFromCandidates(markdown, summary);
-      if (parseAttempt.found) {
+      if (parseAttempt.found && parseAttempt.parsed?.ok) {
         return {
           reportId: foundReportId || "by-simulation",
           rawStatus: statusData,
-          rawBySimulation: bySim.raw,
-          report: bySim,
+          rawBySimulation: bySimPayload,
+          report: {
+            reportText: parseAttempt.source === "markdown_content" ? markdown : summary,
+            raw: bySimPayload
+          },
           parseAttemptSource: parseAttempt.source,
-          numericProbabilityFound: true
+          numericProbabilityFound: true,
+          parsed: parseAttempt.parsed,
+          readyReason: "report completed via by-simulation"
         };
       }
-      if (status === "failed" || status === "error") {
+      if (bySimStatus === "failed" || bySimStatus === "error" || reportStatus === "failed" || reportStatus === "error") {
         throw new WorkflowStepError(
           {
             step: "waitReport",
             simulationId,
             taskId,
-            status,
+            status: bySimStatus || reportStatus || "failed",
             error: "Report generation failed",
             rawReportStatus: statusData
           },
           `report failed: ${stringifyCompact(statusData)}`
         );
       }
-      if (status === "completed" || status === "ready") {
-        const preview = `${markdown}\n${summary}`.slice(0, 500);
+      if (completed) {
         throw new WorkflowStepError(
           {
             step: "waitReport",
+            reason: "completed report has no parseable numeric probability",
             simulationId,
             taskId,
-            status,
-            error: "Report completed but numeric probability missing",
-            reportTextPreview: preview,
+            status: bySimStatus || reportStatus || "completed",
+            markdownPreview: markdown.slice(0, 1000),
+            summaryPreview: summary.slice(0, 1000),
             rawReportStatus: statusData,
-            rawReportBySimulation: bySim.raw
+            rawReportBySimulation: bySimPayload
           },
           "Could not parse numeric probability from completed report"
         );
+      }
+      if (["planning", "processing", "generating"].includes(reportStatus) && !parseAttempt.found) {
+        await sleep(config.MIROFISH_POLL_INTERVAL_MS);
+        continue;
       }
       await sleep(config.MIROFISH_POLL_INTERVAL_MS);
     }
@@ -597,40 +621,44 @@ function clamp(n: number, min: number, max: number): number {
 }
 
 function parseProbabilityAndConfidence(text: string): { probability?: number; confidence?: number } {
-  const probPatterns = [
-    /YES probability of\s*(0?\.\d+)/i,
-    /YES probability\s*:\s*(0?\.\d+)/i,
-    /YES probability\s*:\s*(\d+(?:\.\d+)?)\s*%/i,
-    /YES probability of\s*(\d+(?:\.\d+)?)\s*%/i,
-    /YES概率为\s*(0?\.\d+)/i,
-    /YES概率为\s*(\d+(?:\.\d+)?)\s*%/i,
-    /胜选概率为\s*(0?\.\d+)/i,
-    /胜选概率较高.*?(\d+(?:\.\d+)?%)/i,
-    /概率为\s*(0?\.\d+)/i
+  const probPatterns: Array<{ re: RegExp; percentContext: boolean }> = [
+    { re: /YES probability of\s*(0?\.\d+)/i, percentContext: false },
+    { re: /YES probability\s*:\s*(0?\.\d+)/i, percentContext: false },
+    { re: /YES probability\s*:\s*(\d+(?:\.\d+)?)\s*%/i, percentContext: true },
+    { re: /YES probability of\s*(\d+(?:\.\d+)?)\s*%/i, percentContext: true },
+    { re: /has a\s+([0-9]+(?:\.[0-9]+)?)%\s+probability/i, percentContext: true },
+    { re: /([0-9]+(?:\.[0-9]+)?)%\s+probability/i, percentContext: true },
+    { re: /YES概率[^0-9]{0,30}([0-9]+(?:\.[0-9]+)?%?)/i, percentContext: true },
+    { re: /胜选概率[^0-9]{0,30}([0-9]+(?:\.[0-9]+)?%?)/i, percentContext: true },
+    { re: /YES概率为\s*(0?\.\d+)/i, percentContext: false },
+    { re: /YES概率为\s*(\d+(?:\.\d+)?)\s*%/i, percentContext: true },
+    { re: /胜选概率为\s*(0?\.\d+)/i, percentContext: false },
+    { re: /胜选概率较高.*?([0-9]+(?:\.[0-9]+)?%)/i, percentContext: true },
+    { re: /概率为\s*(0?\.\d+)/i, percentContext: false }
   ];
-  const confPatterns = [
-    /confidence score of\s*(0?\.\d+)/i,
-    /confidence_score\s*:\s*(0?\.\d+)/i,
-    /confidence score\s*:\s*(\d+(?:\.\d+)?)\s*%/i,
-    /置信度得分为\s*(0?\.\d+)/i,
-    /置信度为\s*(0?\.\d+)/i
+  const confPatterns: Array<{ re: RegExp; percentContext: boolean }> = [
+    { re: /confidence score of\s*(0?\.\d+)/i, percentContext: false },
+    { re: /confidence_score[^0-9]{0,30}([0-9]+(?:\.[0-9]+)?%?)/i, percentContext: true },
+    { re: /confidence score\s*:\s*(\d+(?:\.\d+)?)\s*%/i, percentContext: true },
+    { re: /置信度得分为\s*(0?\.\d+)/i, percentContext: false },
+    { re: /置信度为\s*(0?\.\d+)/i, percentContext: false },
+    { re: /置信度评分[^0-9]{0,30}([0-9]+(?:\.[0-9]+)?%?)/i, percentContext: true }
   ];
 
   let probability: number | undefined;
   for (const p of probPatterns) {
-    const m = text.match(p);
+    const m = text.match(p.re);
     if (m?.[1]) {
-      const n = Number(m[1]);
-      probability = n > 1 ? n / 100 : n;
+      probability = normalizeCapturedNumber(m[1], p.percentContext);
       break;
     }
   }
   let confidence: number | undefined;
   for (const p of confPatterns) {
-    const m = text.match(p);
+    const m = text.match(p.re);
     if (m?.[1]) {
-      const n = Number(m[1]);
-      confidence = n > 1 ? n : n * 100;
+      const norm = normalizeCapturedNumber(m[1], p.percentContext);
+      confidence = norm > 1 ? norm : norm * 100;
       break;
     }
   }
@@ -642,6 +670,7 @@ function attemptParseFromCandidates(markdown: string, summary: string): {
   source?: "markdown_content" | "outline.summary";
   probability?: number;
   confidence?: number;
+  parsed?: ReturnType<MiroFishClient["parseProbabilityFromReport"]>;
 } {
   const candidates: Array<{ source: "markdown_content" | "outline.summary"; text: string }> = [
     { source: "markdown_content", text: markdown },
@@ -650,16 +679,34 @@ function attemptParseFromCandidates(markdown: string, summary: string): {
   for (const c of candidates) {
     if (!c.text.trim()) continue;
     const parsed = parseProbabilityAndConfidence(c.text);
-    if (parsed.probability !== undefined) {
+    if (parsed.probability !== undefined && Number.isFinite(parsed.probability)) {
+      const rp = clamp(parsed.probability, 0, 1);
+      const rc = clamp(parsed.confidence ?? rp * 100, 0, 100);
       return {
         found: true,
         source: c.source,
-        probability: parsed.probability,
-        confidence: parsed.confidence
+        probability: rp,
+        confidence: rc,
+        parsed: {
+          ok: true,
+          rawConfidenceScore: rc,
+          rawProbability: rp,
+          reportText: c.text,
+          source: c.source
+        }
       };
     }
   }
   return { found: false };
+}
+
+function normalizeCapturedNumber(raw: string, percentContext: boolean): number {
+  const cleaned = raw.trim();
+  const hasPercent = cleaned.includes("%");
+  const n = Number(cleaned.replace("%", ""));
+  if (!Number.isFinite(n)) return NaN;
+  if (hasPercent || percentContext) return n / 100;
+  return n;
 }
 
 function inspectPrepareFailure(data: unknown): {

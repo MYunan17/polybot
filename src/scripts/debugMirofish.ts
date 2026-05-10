@@ -74,6 +74,9 @@ void (async () => {
     console.log(JSON.stringify(wf.reportStatusRaw ?? {}, null, 2));
     console.log(`parseAttemptSource: ${wf.parseAttemptSource ?? "-"}`);
     console.log(`numericProbabilityFound: ${wf.numericProbabilityFound === true ? "true" : "false"}`);
+    if (wf.reportReadyReason) {
+      console.log(wf.reportReadyReason);
+    }
   }
 
   if (!result.ok || !result.result) {
@@ -97,6 +100,7 @@ void (async () => {
     if (parseAttemptSource) {
       console.log(`parseAttemptSource: ${parseAttemptSource}`);
     }
+    console.log("final exit reason: graceful failure");
     process.exit(0);
   }
 
@@ -113,4 +117,5 @@ void (async () => {
       2
     )
   );
+  console.log("final exit reason: success");
 })();
