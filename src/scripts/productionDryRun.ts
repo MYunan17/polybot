@@ -28,6 +28,10 @@ interface PaperTradeRow {
   status: string;
   note: string | null;
   created_at: string;
+  close_price: number | null;
+  close_reason: string | null;
+  pnl_usd: number | null;
+  closed_at: string | null;
 }
 
 const COUNT_TABLES: Array<keyof DbCounts> = [
@@ -55,7 +59,7 @@ async function fetchLatestPaperTrades(runId?: string, limit = 5): Promise<PaperT
   const db = await getDb();
   return db.all<Array<PaperTradeRow>>(
     `
-    SELECT market_id, side, probability, market_price, edge, status, note, created_at
+    SELECT market_id, side, probability, market_price, edge, status, note, created_at, close_price, close_reason, pnl_usd, closed_at
     FROM paper_trades
     WHERE run_id = ?
     ORDER BY id DESC
@@ -87,7 +91,14 @@ function formatTrades(trades: PaperTradeRow[]): string {
       const prob = (t.probability * 100).toFixed(1);
       const price = (t.market_price * 100).toFixed(1);
       const edge = (t.edge * 100).toFixed(1);
-      return `${t.market_id} ${t.side} prob=${prob}% price=${price}% edge=${edge}% status=${t.status}`;
+      const base = `${t.market_id} ${t.side} prob=${prob}% price=${price}% edge=${edge}% status=${t.status}`;
+      if (t.status === "paper_closed") {
+        const closePrice = t.close_price != null ? `${(t.close_price * 100).toFixed(1)}%` : "n/a";
+        const pnl = t.pnl_usd != null ? t.pnl_usd.toFixed(2) : "n/a";
+        const reason = t.close_reason ?? "n/a";
+        return `${base} closePrice=${closePrice} pnl=${pnl} reason=${reason}`;
+      }
+      return base;
     })
     .join("\n");
 }
@@ -154,7 +165,7 @@ void (async () => {
       ? `MiroFish: success ${phase3Summary.successCount}/${phase3Summary.considered}, avg ${(phase3Summary.avgProbability * 100).toFixed(2)}%`
       : "MiroFish: (not run)",
     phase4Summary
-      ? `Paper: simulated ${phase4Summary.simulated}/${phase4Summary.considered}, skipped ${phase4Summary.skipped}`
+      ? `Paper: simulated ${phase4Summary.simulated}/${phase4Summary.considered}, skipped ${phase4Summary.skipped} (dupes ${phase4Summary.duplicateOpenSkipped}, flips closed ${phase4Summary.closedOnSignalFlip})`
       : "Paper: (not run)",
     `DB counts => ${formatCounts(counts)}`,
     backupPath ? `DB backup: ${backupPath}` : "DB backup: skipped",

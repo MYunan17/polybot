@@ -5,12 +5,15 @@ import { logger } from "../logger";
 import { SqliteStore } from "../services/sqliteStore";
 import { CalibrationAgent } from "../agents/calibrationAgent";
 import { EdgeJudgmentAgent } from "../agents/edgeJudgmentAgent";
+import { Judgment } from "../types";
 
 export interface PaperSummary {
   runId: string;
   considered: number;
   simulated: number;
   skipped: number;
+  duplicateOpenSkipped: number;
+  closedOnSignalFlip: number;
 }
 
 export interface PaperOptions {
@@ -37,12 +40,13 @@ export async function runPhase4Paper(_options?: PaperOptions): Promise<PaperSumm
       },
       "Paper run exited gracefully"
     );
-    return { runId, considered: 0, simulated: 0, skipped: 0 };
+    return { runId, considered: 0, simulated: 0, skipped: 0, duplicateOpenSkipped: 0, closedOnSignalFlip: 0 };
   }
 
   let simulated = 0;
   let skipped = 0;
   let duplicateOpenSkipped = 0;
+  let closedOnSignalFlip = 0;
 
   for (const p of preds) {
     try {
@@ -50,30 +54,7 @@ export async function runPhase4Paper(_options?: PaperOptions): Promise<PaperSumm
         skipped += 1;
         continue;
       }
-      const hasOpenTrade = await store.hasOpenPaperTrade(p.marketId);
-      if (hasOpenTrade) {
-        duplicateOpenSkipped += 1;
-        skipped += 1;
-        await store.insertDecision(
-          runId,
-          p.marketId,
-          {
-            marketId: p.marketId,
-            action: "SKIP",
-            adjustedProbability: p.rawProbability,
-            executablePrice: p.seed.best_ask ?? p.seed.current_odds,
-            marketProbability: p.seed.current_odds,
-            edge: 0,
-            spread: p.seed.spread ?? 0,
-            reason: "Existing open paper trade for market",
-            confidence: "low"
-          },
-          { approved: false, reason: "Existing open paper trade for market" },
-          { status: "dry_run", message: "Paper mode only; no execution performed" },
-          true
-        );
-        continue;
-      }
+      const openTrade = await store.getOpenPaperTrade(p.marketId);
       const calibrated = await calibration.run(p.marketId, p.rawProbability);
       await store.insertCalibratedPrediction({
         runId,
@@ -112,27 +93,55 @@ export async function runPhase4Paper(_options?: PaperOptions): Promise<PaperSumm
         raw: snapshot?.raw
       };
       const judgment = await edgeAgent.run(market, calibrated);
-      if (judgment.action === "BUY_YES" || judgment.action === "BUY_NO") {
-        await store.insertPaperTrade({
-          runId,
-          marketId: p.marketId,
-          side: judgment.action === "BUY_YES" ? "YES" : "NO",
-          probability: calibrated.adjustedProbability,
-          marketPrice: judgment.marketProbability,
-          edge: judgment.edge,
-          sizeUsd: config.TRADE_SIZE_USD,
-          status: "paper_open",
-          note: "Local Phase 4 paper simulation only"
-        });
-        simulated += 1;
+      let finalJudgment = judgment;
+      const isBuySignal = judgment.action === "BUY_YES" || judgment.action === "BUY_NO";
+      if (isBuySignal) {
+        const desiredSide = judgment.action === "BUY_YES" ? "YES" : "NO";
+        if (openTrade) {
+          skipped += 1;
+          if (openTrade.side === desiredSide) {
+            duplicateOpenSkipped += 1;
+            finalJudgment = toSkipJudgment(judgment, "Existing open paper trade for market");
+          } else {
+            const closePrice = judgment.marketProbability;
+            const pnlUsd = calculatePaperPnl(openTrade.market_price, openTrade.size_usd, openTrade.side, closePrice);
+            await store.closePaperTrade({
+              tradeId: openTrade.id,
+              closePrice,
+              closeReason: "Signal flipped against open paper trade",
+              pnlUsd
+            });
+            closedOnSignalFlip += 1;
+            finalJudgment = toSkipJudgment(judgment, "Signal flipped against open paper trade; closed existing position");
+          }
+        } else {
+          await store.insertPaperTrade({
+            runId,
+            marketId: p.marketId,
+            side: desiredSide,
+            probability: calibrated.adjustedProbability,
+            marketPrice: judgment.marketProbability,
+            edge: judgment.edge,
+            sizeUsd: config.TRADE_SIZE_USD,
+            status: "paper_open",
+            note: "Local Phase 4 paper simulation only"
+          });
+          simulated += 1;
+        }
       } else {
         skipped += 1;
       }
       await store.insertDecision(
         runId,
         p.marketId,
-        judgment,
-        { approved: false, reason: "Paper-only mode; no execution" },
+        finalJudgment,
+        {
+          approved: false,
+          reason:
+            finalJudgment.action === "SKIP"
+              ? finalJudgment.reason
+              : "Paper-only mode; no execution"
+        },
         { status: "dry_run", message: "Paper mode only; no execution performed" },
         true
       );
@@ -149,12 +158,34 @@ export async function runPhase4Paper(_options?: PaperOptions): Promise<PaperSumm
       simulated,
       skipped,
       duplicateOpenSkipped,
+      closedOnSignalFlip,
       note: "No execution/OpenClaw/private keys used"
     },
     "Paper run completed"
   );
 
-  return { runId, considered: preds.length, simulated, skipped };
+  return { runId, considered: preds.length, simulated, skipped, duplicateOpenSkipped, closedOnSignalFlip };
+}
+
+function toSkipJudgment(judgment: Judgment, reason: string): Judgment {
+  return {
+    ...judgment,
+    action: "SKIP" as const,
+    edge: 0,
+    reason,
+    confidence: "low" as const
+  };
+}
+
+function calculatePaperPnl(entryPrice: number, sizeUsd: number, side: "YES" | "NO", closePrice: number): number {
+  const normalizedEntry = Number.isFinite(entryPrice) && entryPrice > 0 ? entryPrice : 0;
+  if (normalizedEntry === 0) return 0;
+  let shares = sizeUsd / normalizedEntry;
+  if (!Number.isFinite(shares) || shares <= 0) {
+    shares = sizeUsd;
+  }
+  const pnl = side === "YES" ? (closePrice - normalizedEntry) * shares : (normalizedEntry - closePrice) * shares;
+  return Number.isFinite(pnl) ? pnl : 0;
 }
 
 if (require.main === module) {

@@ -11,6 +11,20 @@ import {
 } from "../types";
 import { nowIso } from "../utils/time";
 
+interface OpenPaperTradeRow {
+  id: number;
+  run_id: string;
+  market_id: string;
+  side: "YES" | "NO";
+  probability: number;
+  market_price: number;
+  edge: number;
+  size_usd: number;
+  status: string;
+  note: string | null;
+  created_at: string;
+}
+
 export class SqliteStore {
   async upsertMarket(m: ScannedMarket): Promise<void> {
     const db = await getDb();
@@ -46,6 +60,41 @@ export class SqliteStore {
       marketId
     );
     return (row?.count ?? 0) > 0;
+  }
+
+  async getOpenPaperTrade(marketId: string): Promise<OpenPaperTradeRow | null> {
+    const db = await getDb();
+    const row = await db.get<OpenPaperTradeRow>(
+      `
+        SELECT id, run_id, market_id, side, probability, market_price, edge, size_usd, status, note, created_at
+        FROM paper_trades
+        WHERE market_id = ? AND status = 'paper_open'
+        ORDER BY id DESC
+        LIMIT 1
+      `,
+      marketId
+    );
+    return row ?? null;
+  }
+
+  async closePaperTrade(input: { tradeId: number; closePrice: number; closeReason: string; pnlUsd: number }): Promise<void> {
+    const db = await getDb();
+    await db.run(
+      `
+        UPDATE paper_trades
+        SET status = 'paper_closed',
+            close_price = ?,
+            close_reason = ?,
+            pnl_usd = ?,
+            closed_at = ?
+        WHERE id = ?
+      `,
+      input.closePrice,
+      input.closeReason,
+      input.pnlUsd,
+      nowIso(),
+      input.tradeId
+    );
   }
 
   async getMarketSnapshot(marketId: string): Promise<Partial<ScannedMarket> | null> {
@@ -248,7 +297,7 @@ export class SqliteStore {
     marketPrice: number;
     edge: number;
     sizeUsd: number;
-    status: "paper_open" | "paper_skipped";
+    status: "paper_open" | "paper_skipped" | "paper_closed";
     note?: string;
   }): Promise<void> {
     const db = await getDb();

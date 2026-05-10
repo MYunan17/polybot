@@ -131,4 +131,21 @@ export async function initDb(): Promise<void> {
       created_at TEXT NOT NULL
     );
   `);
+  await ensurePaperTradeCloseColumns(db);
+}
+
+async function ensurePaperTradeCloseColumns(db: Database): Promise<void> {
+  const columns = await db.all<Array<{ name: string }>>(`PRAGMA table_info(paper_trades)`);
+  const existing = new Set(columns.map((column) => column.name));
+  const required = [
+    { name: "close_price", type: "REAL" },
+    { name: "close_reason", type: "TEXT" },
+    { name: "pnl_usd", type: "REAL" },
+    { name: "closed_at", type: "TEXT" }
+  ];
+  for (const column of required) {
+    if (!existing.has(column.name)) {
+      await db.exec(`ALTER TABLE paper_trades ADD COLUMN ${column.name} ${column.type}`);
+    }
+  }
 }
