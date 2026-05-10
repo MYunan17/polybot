@@ -1,5 +1,6 @@
 import fs from "node:fs";
 import path from "node:path";
+import { execFile } from "node:child_process";
 import { initDb, getDb } from "../db";
 import { config } from "../config";
 import { logger } from "../logger";
@@ -166,4 +167,35 @@ void (async () => {
   if (telegram.enabled) {
     await telegram.sendText(summaryLines.join("\n"));
   }
+
+  await restartMirofishIfNeeded();
 })();
+
+async function restartMirofishIfNeeded(): Promise<void> {
+  if (!config.RESTART_MIROFISH_AFTER_RUN) return;
+  const container = config.MIROFISH_CONTAINER_NAME?.trim();
+  if (!container) {
+    logger.warn("RESTART_MIROFISH_AFTER_RUN is true but MIROFISH_CONTAINER_NAME is empty");
+    return;
+  }
+  logger.info({ container }, "Restarting MiroFish container after run");
+  try {
+    const result = await execFileAsync("docker", ["restart", container]);
+    logger.info({ container, stdout: result.stdout?.trim() }, "MiroFish container restart completed");
+  } catch (err) {
+    logger.warn({ err, container }, "Failed to restart MiroFish container after run");
+  }
+}
+
+function execFileAsync(command: string, args: string[]): Promise<{ stdout: string; stderr: string }> {
+  return new Promise((resolve, reject) => {
+    const child = execFile(command, args, { timeout: 60_000 }, (error, stdout, stderr) => {
+      if (error) {
+        reject(error);
+        return;
+      }
+      resolve({ stdout: stdout ?? "", stderr: stderr ?? "" });
+    });
+    child.on("error", (error) => reject(error));
+  });
+}

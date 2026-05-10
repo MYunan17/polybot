@@ -56,7 +56,9 @@ const envSchema = z.object({
   LOG_LEVEL: z.string().default("info"),
   SQLITE_PATH: z.string().default("./data/polymarket-bot.sqlite"),
   ENABLE_MIROFISH: boolEnv.default(false),
-  TELEGRAM_VERBOSE: boolEnv.default(false)
+  TELEGRAM_VERBOSE: boolEnv.default(false),
+  RESTART_MIROFISH_AFTER_RUN: boolEnv.default(false),
+  MIROFISH_CONTAINER_NAME: z.string().default("mirofish")
 });
 
 export const config = envSchema.parse(process.env);
