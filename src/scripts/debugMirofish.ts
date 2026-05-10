@@ -4,7 +4,7 @@ import { config } from "../config";
 
 void (async () => {
   const client = new MiroFishClient();
-  const parserCase1 = client.parseProbabilityFromReport({
+    const parserCase1 = client.parseProbabilityFromReport({
     reportText: "",
     raw: { data: { outline: { summary: "胜选概率为54%" } } }
   });
@@ -12,14 +12,37 @@ void (async () => {
     reportText: "",
     raw: { data: { outline: { summary: "YES probability 72%, confidence_score 0.81" } } }
   });
+  const parserCase3 = client.parseProbabilityFromReport({
+    reportText: "",
+    raw: { data: { outline: { summary: "卡罗莱纳飓风队有34.5%的概率赢得2026年斯坦利杯" } } }
+  });
+  const parserCase4 = client.parseProbabilityFromReport({
+    reportText: "",
+    raw: { data: { outline: { summary: "科罗拉多雪崩队赢得2026年NHL斯坦利杯的预测概率为**37.0%**" } } }
+  });
+  const parserCase5 = client.parseProbabilityFromReport({
+    reportText: "",
+    raw: { data: { outline: { summary: "Recent signals suggest Colorado Avalanche has a 37.0% chance to win the 2026 NHL Stanley Cup." } } }
+  });
+
+  const formatParserCase = (
+    result: ReturnType<MiroFishClient["parseProbabilityFromReport"]>
+  ) =>
+    result.ok
+      ? {
+          probability: result.rawProbability,
+          confidenceScore: result.rawConfidenceScore,
+          source: result.source
+        }
+      : { error: result.error };
+
   console.log("Parser checks:");
   console.log(JSON.stringify({
-    case1: parserCase1.ok
-      ? { probability: parserCase1.rawProbability, confidenceScore: parserCase1.rawConfidenceScore, source: parserCase1.source }
-      : { error: parserCase1.error },
-    case2: parserCase2.ok
-      ? { probability: parserCase2.rawProbability, confidenceScore: parserCase2.rawConfidenceScore, source: parserCase2.source }
-      : { error: parserCase2.error }
+    case1: formatParserCase(parserCase1),
+    case2: formatParserCase(parserCase2),
+    case3: formatParserCase(parserCase3),
+    case4: formatParserCase(parserCase4),
+    case5: formatParserCase(parserCase5)
   }, null, 2));
 
   const health = await client.healthCheck();

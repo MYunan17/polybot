@@ -628,16 +628,34 @@ function parseProbabilityAndConfidence(text: string): { probability?: number; co
     { re: /YES probability\s*:\s*(0?\.\d+)/i, percentContext: false },
     { re: /YES probability\s*:\s*(\d+(?:\.\d+)?)\s*%/i, percentContext: true },
     { re: /YES probability of\s*(\d+(?:\.\d+)?)\s*%/i, percentContext: true },
+
+    // English real-market formats
+    { re: /YES probability\s+([0-9]+(?:\.[0-9]+)?%?)/i, percentContext: true },
     { re: /has a\s+([0-9]+(?:\.[0-9]+)?)%\s+probability/i, percentContext: true },
     { re: /([0-9]+(?:\.[0-9]+)?)%\s+probability/i, percentContext: true },
+    { re: /has\s+a\s+([0-9]+(?:\.[0-9]+)?)%\s+chance/i, percentContext: true },
+    { re: /([0-9]+(?:\.[0-9]+)?)%\s+chance/i, percentContext: true },
+    { re: /chance\s+to\s+win[^0-9]{0,40}([0-9]+(?:\.[0-9]+)?%?)/i, percentContext: true },
+    { re: /win[^0-9]{0,40}([0-9]+(?:\.[0-9]+)?)%\s+chance/i, percentContext: true },
+
+    // Chinese explicit YES/win formats
     { re: /YES概率[^0-9]{0,30}([0-9]+(?:\.[0-9]+)?%?)/i, percentContext: true },
     { re: /胜选概率[^0-9]{0,30}([0-9]+(?:\.[0-9]+)?%?)/i, percentContext: true },
     { re: /YES概率为\s*(0?\.\d+)/i, percentContext: false },
     { re: /YES概率为\s*(\d+(?:\.\d+)?)\s*%/i, percentContext: true },
     { re: /胜选概率为\s*(0?\.\d+)/i, percentContext: false },
     { re: /胜选概率较高.*?([0-9]+(?:\.[0-9]+)?%)/i, percentContext: true },
+
+    // Chinese real-market sports/report formats
+    { re: /预测概率为\s*\*{0,2}\s*([0-9]+(?:\.[0-9]+)?%?)\s*\*{0,2}/i, percentContext: true },
+    { re: /概率为\s*\*{0,2}\s*([0-9]+(?:\.[0-9]+)?%?)\s*\*{0,2}/i, percentContext: true },
+    { re: /有\s*\*{0,2}\s*([0-9]+(?:\.[0-9]+)?)\s*%\s*\*{0,2}\s*的概率/i, percentContext: true },
+    { re: /([0-9]+(?:\.[0-9]+)?)\s*%\s*的概率/i, percentContext: true },
+
+    // Decimal Chinese fallback, taruh terakhir
     { re: /概率为\s*(0?\.\d+)/i, percentContext: false }
   ];
+
   const confPatterns: Array<{ re: RegExp; percentContext: boolean }> = [
     { re: /confidence_score[^0-9]{0,30}([0-9]+(?:\.[0-9]+)?%?)/i, percentContext: true },
     { re: /confidence score[^0-9]{0,30}([0-9]+(?:\.[0-9]+)?%?)/i, percentContext: true },
@@ -655,6 +673,7 @@ function parseProbabilityAndConfidence(text: string): { probability?: number; co
       break;
     }
   }
+
   let confidence: number | undefined;
   for (const p of confPatterns) {
     const m = text.match(p.re);
@@ -663,6 +682,7 @@ function parseProbabilityAndConfidence(text: string): { probability?: number; co
       break;
     }
   }
+
   return { probability, confidence };
 }
 
