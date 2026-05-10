@@ -39,6 +39,60 @@ export class SqliteStore {
     );
   }
 
+  async getMarketSnapshot(marketId: string): Promise<Partial<ScannedMarket> | null> {
+    const db = await getDb();
+    const row = await db.get<{
+      market_id: string;
+      question: string;
+      category: string | null;
+      resolution_date: string;
+      liquidity: number;
+      url: string | null;
+      raw_json: string | null;
+    }>(
+      `
+      SELECT market_id, question, category, resolution_date, liquidity, url, raw_json
+      FROM markets
+      WHERE market_id = ?
+    `,
+      marketId
+    );
+    if (!row) return null;
+    const raw = parseJson(row.raw_json);
+    const parsedOutcomePrices = raw ? parseOutcomePrices(raw?.outcomePrices) : null;
+    const { yesTokenId, noTokenId } = raw ? extractTokenIds(raw) : {};
+    const outcomes = raw ? parseOutcomeStrings(raw?.outcomes) : undefined;
+    const bestBid = raw
+      ? coerceNumber(raw?.bestBid ?? raw?.yesBestBid ?? raw?.book?.yesBestBid)
+      : undefined;
+    const bestAsk = raw
+      ? coerceNumber(raw?.bestAsk ?? raw?.yesBestAsk ?? raw?.book?.yesBestAsk)
+      : undefined;
+    const spread = raw
+      ? coerceNumber(raw?.spread ?? raw?.book?.spread) ??
+        (bestBid !== undefined && bestAsk !== undefined ? Math.max(0, bestAsk - bestBid) : undefined)
+      : undefined;
+
+    return {
+      marketId: row.market_id,
+      question: row.question,
+      resolutionDate: row.resolution_date,
+      liquidity: Number(row.liquidity ?? 0),
+      volume: raw ? coerceNumber(raw?.volume) ?? 0 : 0,
+      currentYesPrice: parsedOutcomePrices?.[0] ?? (raw ? coerceNumber(raw?.yesPrice) : undefined),
+      currentNoPrice: parsedOutcomePrices?.[1] ?? (raw ? coerceNumber(raw?.noPrice) : undefined),
+      bestBid,
+      bestAsk,
+      spread,
+      outcomes,
+      yesTokenId,
+      noTokenId,
+      category: row.category ?? undefined,
+      url: row.url ?? undefined,
+      raw: raw ?? undefined
+    };
+  }
+
   async insertDecision(runId: string, marketId: string, judgment: Judgment, risk: RiskDecision, exec: ExecutionResult, dryRun: boolean): Promise<void> {
     const db = await getDb();
     await db.run(
@@ -235,4 +289,116 @@ export class SqliteStore {
       nowIso()
     );
   }
+}
+
+function parseJson(input: string | null): any | undefined {
+  if (!input) return undefined;
+  try {
+    return JSON.parse(input);
+  } catch {
+    return undefined;
+  }
+}
+
+function parseOutcomeStrings(value: unknown): string[] | undefined {
+  const arr = parseMaybeJsonArray(value)
+    .map((item) => (typeof item === "string" ? item : undefined))
+    .filter((item): item is string => Boolean(item));
+  return arr.length ? arr : undefined;
+}
+
+function parseOutcomePrices(input: unknown): number[] | null {
+  const values = parseMaybeJsonArray(input);
+  if (!values.length) return null;
+  const normalized = values
+    .map((value) => coerceNumber(value))
+    .filter((value): value is number => typeof value === "number");
+  return normalized.length ? normalized : null;
+}
+
+function parseMaybeJsonArray(value: unknown): unknown[] {
+  if (Array.isArray(value)) return value;
+  if (typeof value === "string") {
+    try {
+      const parsed = JSON.parse(value);
+      if (Array.isArray(parsed)) return parsed;
+    } catch {
+      return value
+        .split(",")
+        .map((part) => part.trim())
+        .filter((part) => part.length);
+    }
+  }
+  return [];
+}
+
+function extractTokenIds(m: any): { yesTokenId?: string; noTokenId?: string } {
+  const result: { yesTokenId?: string; noTokenId?: string } = {};
+  if (!m) return result;
+
+  const normalizeTokenId = (value: unknown): string | undefined => {
+    if (typeof value === "string") {
+      const trimmed = value.trim();
+      return trimmed.length ? trimmed : undefined;
+    }
+    if (typeof value === "number" && Number.isFinite(value)) {
+      return String(value);
+    }
+    return undefined;
+  };
+
+  const normalizeOutcomeLabel = (value: unknown): "YES" | "NO" | undefined => {
+    if (typeof value !== "string") return undefined;
+    const normalized = value.trim().toLowerCase();
+    if (normalized === "yes") return "YES";
+    if (normalized === "no") return "NO";
+    return undefined;
+  };
+
+  const clobTokenIdsRaw = parseMaybeJsonArray(m?.clobTokenIds);
+  const clobTokenIds = clobTokenIdsRaw.map((value) => normalizeTokenId(value));
+  if (clobTokenIds[0]) result.yesTokenId = clobTokenIds[0];
+  if (clobTokenIds[1]) result.noTokenId = clobTokenIds[1];
+  if (result.yesTokenId && result.noTokenId) {
+    return result;
+  }
+
+  const tokens = parseMaybeJsonArray(m?.tokens);
+  for (const token of tokens) {
+    if (!token || typeof token !== "object") continue;
+    const label = normalizeOutcomeLabel(
+      (token as any).outcome ?? (token as any).name ?? (token as any).side
+    );
+    const tokenId = normalizeTokenId(
+      (token as any).token_id ?? (token as any).id ?? (token as any).tokenId
+    );
+    if (!label || !tokenId) continue;
+    if (label === "YES" && !result.yesTokenId) result.yesTokenId = tokenId;
+    if (label === "NO" && !result.noTokenId) result.noTokenId = tokenId;
+  }
+  if (result.yesTokenId && result.noTokenId) {
+    return result;
+  }
+
+  const outcomes = parseMaybeJsonArray(m?.outcomes);
+  if (outcomes.length && clobTokenIds.length && outcomes.length === clobTokenIds.length) {
+    outcomes.forEach((outcome, idx) => {
+      const label = normalizeOutcomeLabel(outcome);
+      const tokenId = clobTokenIds[idx];
+      if (!label || !tokenId) return;
+      if (label === "YES" && !result.yesTokenId) result.yesTokenId = tokenId;
+      if (label === "NO" && !result.noTokenId) result.noTokenId = tokenId;
+    });
+  }
+
+  return result;
+}
+
+function coerceNumber(value: unknown): number | undefined {
+  if (typeof value === "number" && Number.isFinite(value)) return value;
+  if (typeof value === "string") {
+    const parsed = Number(value.trim());
+    return Number.isFinite(parsed) ? parsed : undefined;
+  }
+  return undefined;
 }

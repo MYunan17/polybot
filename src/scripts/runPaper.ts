@@ -49,23 +49,31 @@ void (async () => {
         sampleSize: calibrated.sampleSize,
         categoryAdjustment: calibrated.categoryAdjustment
       });
+      const snapshot = await store.getMarketSnapshot(p.marketId);
+      const hydratedYes = snapshot?.currentYesPrice ?? p.seed.current_odds;
+      const hydratedNo = snapshot?.currentNoPrice ?? 1 - hydratedYes;
+      const bestBid = snapshot?.bestBid ?? p.seed.best_bid;
+      const bestAsk = snapshot?.bestAsk ?? p.seed.best_ask;
+      const spread = snapshot?.spread ?? p.seed.spread ??
+        (bestBid !== undefined && bestAsk !== undefined ? Math.max(0, bestAsk - bestBid) : undefined);
       const market = {
         marketId: p.marketId,
         question: p.seed.question,
         description: "",
         resolutionDate: p.seed.resolution_date,
-        liquidity: 0,
-        volume: 0,
-        currentYesPrice: p.seed.current_odds,
-        currentNoPrice: 1 - p.seed.current_odds,
-        bestBid: p.seed.best_bid,
-        bestAsk: p.seed.best_ask,
-        spread: p.seed.spread,
-        yesTokenId: undefined,
-        noTokenId: undefined,
-        category: "unknown",
-        url: undefined,
-        raw: undefined
+        liquidity: snapshot?.liquidity ?? 0,
+        volume: snapshot?.volume ?? 0,
+        currentYesPrice: hydratedYes,
+        currentNoPrice: hydratedNo,
+        bestBid,
+        bestAsk,
+        spread,
+        outcomes: snapshot?.outcomes,
+        yesTokenId: snapshot?.yesTokenId,
+        noTokenId: snapshot?.noTokenId,
+        category: snapshot?.category ?? "unknown",
+        url: snapshot?.url,
+        raw: snapshot?.raw
       };
       const judgment = await edgeAgent.run(market, calibrated);
       if (judgment.action === "BUY_YES" || judgment.action === "BUY_NO") {
