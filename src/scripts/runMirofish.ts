@@ -8,7 +8,17 @@ import { MiroFishClient } from "../services/mirofishClient";
 import { MiroFishSwarmAgent } from "../agents/mirofishSwarmAgent";
 import { TelegramClient } from "../services/telegramClient";
 
-void (async () => {
+export interface Phase3Summary {
+  runId: string;
+  considered: number;
+  successCount: number;
+  failCount: number;
+  avgProbability: number;
+  health: { ok: boolean; detectedRoute?: string; message?: string };
+  topConfidence: string;
+}
+
+export async function runPhase3Mirofish(): Promise<Phase3Summary> {
   await initDb();
   const runId = randomUUID();
   const store = new SqliteStore();
@@ -167,7 +177,21 @@ void (async () => {
     },
     "Phase 3 run completed"
   );
-})().catch((err) => {
-  logger.error({ err }, "Phase 3 run crashed");
-  process.exit(1);
-});
+
+  return {
+    runId,
+    considered: seedRecords.length,
+    successCount,
+    failCount,
+    avgProbability: avgProb,
+    health: { ok: healthOk, detectedRoute: health.detectedRoute, message: health.message },
+    topConfidence: top3 || "-"
+  };
+}
+
+if (require.main === module) {
+  runPhase3Mirofish().catch((err) => {
+    logger.error({ err }, "Phase 3 run crashed");
+    process.exit(1);
+  });
+}

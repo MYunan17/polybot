@@ -6,7 +6,14 @@ import { SqliteStore } from "../services/sqliteStore";
 import { CalibrationAgent } from "../agents/calibrationAgent";
 import { EdgeJudgmentAgent } from "../agents/edgeJudgmentAgent";
 
-void (async () => {
+export interface PaperSummary {
+  runId: string;
+  considered: number;
+  simulated: number;
+  skipped: number;
+}
+
+export async function runPhase4Paper(): Promise<PaperSummary> {
   await initDb();
   const runId = randomUUID();
   const store = new SqliteStore();
@@ -26,7 +33,7 @@ void (async () => {
       },
       "Paper run exited gracefully"
     );
-    return;
+    return { runId, considered: 0, simulated: 0, skipped: 0 };
   }
 
   let simulated = 0;
@@ -116,4 +123,13 @@ void (async () => {
     },
     "Paper run completed"
   );
-})();
+
+  return { runId, considered: preds.length, simulated, skipped };
+}
+
+if (require.main === module) {
+  runPhase4Paper().catch((err) => {
+    logger.error({ err }, "Paper run crashed");
+    process.exit(1);
+  });
+}
