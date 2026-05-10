@@ -26,6 +26,10 @@ export class PolymarketGammaService {
       if (daysUntil(resolutionDate) < config.MIN_DAYS_TO_RESOLUTION) continue;
       if (liquidity < config.MIN_LIQUIDITY_USD) continue;
       if (yes < config.MIN_ODDS || yes > config.MAX_ODDS) continue;
+      const outcomeStrings = parseMaybeJsonArray(m?.outcomes)
+        .map((value) => (typeof value === "string" ? value : undefined))
+        .filter((value): value is string => Boolean(value));
+      const { yesTokenId, noTokenId } = extractTokenIds(m);
       out.push({
         marketId: String(m?.id ?? m?.slug ?? ""),
         question: String(m?.question ?? ""),
@@ -35,17 +39,12 @@ export class PolymarketGammaService {
         volume: Number(m?.volume ?? 0),
         currentYesPrice: yes,
         currentNoPrice: Number.isFinite(no) ? no : 1 - yes,
-        outcomes: Array.isArray(m?.outcomes) ? m.outcomes : undefined,
-        yesTokenId: m?.clobTokenIds?.[0] ? String(m.clobTokenIds[0]) : undefined,
-        noTokenId: m?.clobTokenIds?.[1] ? String(m.clobTokenIds[1]) : undefined,
+        outcomes: outcomeStrings.length ? outcomeStrings : undefined,
+        yesTokenId,
+        noTokenId,
         category: String(m?.category ?? "unknown"),
         url: m?.slug ? `https://polymarket.com/event/${m.slug}` : undefined,
-        raw: {
-          id: m?.id,
-          slug: m?.slug,
-          active: m?.active,
-          closed: m?.closed
-        }
+        raw: m
       });
     }
     return out.filter((m) => m.marketId && m.question);
@@ -63,4 +62,82 @@ function parseOutcomePrices(input: unknown): string[] | number[] | null {
     }
   }
   return null;
+}
+
+function parseMaybeJsonArray(value: unknown): unknown[] {
+  if (Array.isArray(value)) return value;
+  if (typeof value === "string") {
+    try {
+      const parsed = JSON.parse(value);
+      if (Array.isArray(parsed)) return parsed;
+    } catch {
+      return value
+        .split(",")
+        .map((part) => part.trim())
+        .filter((part) => part.length);
+    }
+  }
+  return [];
+}
+
+function extractTokenIds(m: any): { yesTokenId?: string; noTokenId?: string } {
+  const result: { yesTokenId?: string; noTokenId?: string } = {};
+  if (!m) return result;
+
+  const normalizeTokenId = (value: unknown): string | undefined => {
+    if (typeof value === "string") {
+      const trimmed = value.trim();
+      return trimmed.length ? trimmed : undefined;
+    }
+    if (typeof value === "number" && Number.isFinite(value)) {
+      return String(value);
+    }
+    return undefined;
+  };
+
+  const normalizeOutcomeLabel = (value: unknown): "YES" | "NO" | undefined => {
+    if (typeof value !== "string") return undefined;
+    const normalized = value.trim().toLowerCase();
+    if (normalized === "yes") return "YES";
+    if (normalized === "no") return "NO";
+    return undefined;
+  };
+
+  const clobTokenIdsRaw = parseMaybeJsonArray(m?.clobTokenIds);
+  const clobTokenIds = clobTokenIdsRaw.map((value) => normalizeTokenId(value));
+  if (clobTokenIds[0]) result.yesTokenId = clobTokenIds[0];
+  if (clobTokenIds[1]) result.noTokenId = clobTokenIds[1];
+  if (result.yesTokenId && result.noTokenId) {
+    return result;
+  }
+
+  const tokens = parseMaybeJsonArray(m?.tokens);
+  for (const token of tokens) {
+    if (!token || typeof token !== "object") continue;
+    const label = normalizeOutcomeLabel(
+      (token as any).outcome ?? (token as any).name ?? (token as any).side
+    );
+    const tokenId = normalizeTokenId(
+      (token as any).token_id ?? (token as any).id ?? (token as any).tokenId
+    );
+    if (!label || !tokenId) continue;
+    if (label === "YES" && !result.yesTokenId) result.yesTokenId = tokenId;
+    if (label === "NO" && !result.noTokenId) result.noTokenId = tokenId;
+  }
+  if (result.yesTokenId && result.noTokenId) {
+    return result;
+  }
+
+  const outcomes = parseMaybeJsonArray(m?.outcomes);
+  if (outcomes.length && clobTokenIds.length && outcomes.length === clobTokenIds.length) {
+    outcomes.forEach((outcome, idx) => {
+      const label = normalizeOutcomeLabel(outcome);
+      const tokenId = clobTokenIds[idx];
+      if (!label || !tokenId) return;
+      if (label === "YES" && !result.yesTokenId) result.yesTokenId = tokenId;
+      if (label === "NO" && !result.noTokenId) result.noTokenId = tokenId;
+    });
+  }
+
+  return result;
 }
