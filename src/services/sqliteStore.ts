@@ -72,6 +72,22 @@ export interface PaperPortfolioSummary {
   latestClosed: PaperTradeRecord[];
 }
 
+export interface OpenClawPlanInsert {
+  runId: string;
+  marketId: string;
+  action: "BUY" | "SELL" | "CLOSE" | "SKIP";
+  side: "YES" | "NO" | "BOTH";
+  tokenId?: string;
+  sizeUsd: number;
+  limitPrice: number;
+  maxSlippage?: number;
+  dryRun: boolean;
+  approvalStatus: string;
+  reason: string;
+  riskChecks: string[];
+  planJson: Record<string, unknown>;
+}
+
 function mapPaperTradeRow(row: PaperTradeDbRow): PaperTradeRecord {
   return {
     id: row.id,
@@ -119,6 +135,42 @@ export class SqliteStore {
       nowIso(),
       nowIso()
     );
+  }
+
+  async insertOpenClawExecutionPlan(input: OpenClawPlanInsert): Promise<void> {
+    const db = await getDb();
+    await db.run(
+      `
+        INSERT INTO openclaw_execution_plans
+          (run_id, market_id, action, side, token_id, size_usd, limit_price, max_slippage, dry_run, approval_status, reason, risk_checks, plan_json, created_at)
+        VALUES
+          (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+      `,
+      input.runId,
+      input.marketId,
+      input.action,
+      input.side,
+      input.tokenId ?? null,
+      input.sizeUsd,
+      input.limitPrice,
+      input.maxSlippage ?? null,
+      input.dryRun ? 1 : 0,
+      input.approvalStatus,
+      input.reason,
+      JSON.stringify(input.riskChecks ?? []),
+      JSON.stringify(input.planJson),
+      nowIso()
+    );
+  }
+
+  async countOpenClawPlans(runId?: string): Promise<number> {
+    if (!runId) return 0;
+    const db = await getDb();
+    const row = await db.get<{ count: number }>(
+      `SELECT COUNT(*) as count FROM openclaw_execution_plans WHERE run_id = ?`,
+      runId
+    );
+    return row?.count ?? 0;
   }
 
   async getPaperPortfolioSummary(limit = 5): Promise<PaperPortfolioSummary> {

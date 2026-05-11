@@ -103,6 +103,7 @@ void (async () => {
 
   const counts = await fetchCounts();
   const portfolio = await store.getPaperPortfolioSummary();
+  const openClawPlans = await store.countOpenClawPlans(phase4Summary?.runId);
 
   const summary = {
     seed: "ok",
@@ -110,6 +111,7 @@ void (async () => {
     paper: phase4Summary,
     counts,
     portfolio,
+    openClaw: { enabled: config.ENABLE_OPENCLAW, plans: openClawPlans },
     backup: backupPath ?? undefined
   };
 
@@ -118,6 +120,7 @@ void (async () => {
   const portfolioLine = formatPortfolioLine(portfolio);
   const latestOpenLine = `Latest open positions: ${formatOpenPositions(portfolio.latestOpen)}`;
   const latestClosedLine = `Latest closed trades: ${formatClosedTrades(portfolio.latestClosed)}`;
+  const openClawLine = formatOpenClawLine(openClawPlans);
 
   const summaryLines = [
     "Phase 5 Production Dry Run",
@@ -128,6 +131,7 @@ void (async () => {
     phase4Summary
       ? `Paper: simulated ${phase4Summary.simulated}/${phase4Summary.considered}, skipped ${phase4Summary.skipped} (dupes ${phase4Summary.duplicateOpenSkipped}, flips closed ${phase4Summary.closedOnSignalFlip})`
       : "Paper: (not run)",
+    openClawLine,
     portfolioLine,
     latestOpenLine,
     latestClosedLine,
@@ -172,6 +176,11 @@ function formatClosedTrades(trades: PaperTradeRecord[]): string {
       return `${t.marketId} ${t.side} pnl=${pnl} close=${closePrice} reason=${reason}`;
     })
     .join(" | ");
+}
+
+function formatOpenClawLine(plans: number): string {
+  if (!config.ENABLE_OPENCLAW) return "OpenClaw: disabled";
+  return `OpenClaw: dry-run plans ${plans}, live orders 0`;
 }
 
 async function restartMirofishIfNeeded(): Promise<void> {

@@ -146,6 +146,23 @@ export async function initDb(): Promise<void> {
       summary TEXT,
       created_at TEXT NOT NULL
     );
+    CREATE TABLE IF NOT EXISTS openclaw_execution_plans (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      run_id TEXT NOT NULL,
+      market_id TEXT NOT NULL,
+      action TEXT NOT NULL,
+      side TEXT NOT NULL,
+      token_id TEXT,
+      size_usd REAL NOT NULL,
+      limit_price REAL NOT NULL,
+      max_slippage REAL,
+      dry_run INTEGER NOT NULL,
+      approval_status TEXT NOT NULL,
+      reason TEXT,
+      risk_checks TEXT,
+      plan_json TEXT NOT NULL,
+      created_at TEXT NOT NULL
+    );
   `);
   await ensurePaperTradeCloseColumns(db);
 }

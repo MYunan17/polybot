@@ -5,6 +5,7 @@ import { logger } from "../logger";
 import { SqliteStore } from "../services/sqliteStore";
 import { CalibrationAgent } from "../agents/calibrationAgent";
 import { EdgeJudgmentAgent } from "../agents/edgeJudgmentAgent";
+import { OpenClawExecutionAdapter } from "../services/openClawExecutionAdapter";
 import { Judgment } from "../types";
 
 export interface PaperSummary {
@@ -14,6 +15,7 @@ export interface PaperSummary {
   skipped: number;
   duplicateOpenSkipped: number;
   closedOnSignalFlip: number;
+  openClawPlans: number;
 }
 
 export interface PaperOptions {
@@ -26,6 +28,7 @@ export async function runPhase4Paper(_options?: PaperOptions): Promise<PaperSumm
   const store = new SqliteStore();
   const calibration = new CalibrationAgent(store);
   const edgeAgent = new EdgeJudgmentAgent(config);
+  const openClawAdapter = config.ENABLE_OPENCLAW ? new OpenClawExecutionAdapter(config, store) : null;
 
   const limit = Math.min(config.MAX_CANDIDATES_FOR_MIROFISH, config.MAX_CANDIDATES_FOR_LIGHT_AI);
   const preds = await store.getLatestSuccessfulMiroFishPredictions(limit);
@@ -40,13 +43,14 @@ export async function runPhase4Paper(_options?: PaperOptions): Promise<PaperSumm
       },
       "Paper run exited gracefully"
     );
-    return { runId, considered: 0, simulated: 0, skipped: 0, duplicateOpenSkipped: 0, closedOnSignalFlip: 0 };
+    return { runId, considered: 0, simulated: 0, skipped: 0, duplicateOpenSkipped: 0, closedOnSignalFlip: 0, openClawPlans: 0 };
   }
 
   let simulated = 0;
   let skipped = 0;
   let duplicateOpenSkipped = 0;
   let closedOnSignalFlip = 0;
+  let openClawPlans = 0;
 
   for (const p of preds) {
     try {
@@ -126,6 +130,18 @@ export async function runPhase4Paper(_options?: PaperOptions): Promise<PaperSumm
             status: "paper_open",
             note: "Local Phase 4 paper simulation only"
           });
+          if (openClawAdapter) {
+            const planned = await openClawAdapter.planTrade({
+              runId,
+              market,
+              snapshot,
+              judgment,
+              action: "BUY",
+              side: desiredSide,
+              note: "Paper trade simulated"
+            });
+            if (planned) openClawPlans += 1;
+          }
           simulated += 1;
         }
       } else {
@@ -159,12 +175,13 @@ export async function runPhase4Paper(_options?: PaperOptions): Promise<PaperSumm
       skipped,
       duplicateOpenSkipped,
       closedOnSignalFlip,
+      openClawPlans,
       note: "No execution/OpenClaw/private keys used"
     },
     "Paper run completed"
   );
 
-  return { runId, considered: preds.length, simulated, skipped, duplicateOpenSkipped, closedOnSignalFlip };
+  return { runId, considered: preds.length, simulated, skipped, duplicateOpenSkipped, closedOnSignalFlip, openClawPlans };
 }
 
 function toSkipJudgment(judgment: Judgment, reason: string): Judgment {
