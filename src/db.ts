@@ -18,6 +18,12 @@ export async function getDb(): Promise<Database> {
   return dbInstance;
 }
 
+export async function closeDb(): Promise<void> {
+  if (!dbInstance) return;
+  await dbInstance.close();
+  dbInstance = null;
+}
+
 export async function initDb(): Promise<void> {
   const db = await getDb();
   await db.exec(`

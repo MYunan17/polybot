@@ -1,7 +1,7 @@
 import fs from "node:fs";
 import path from "node:path";
 import { execFile } from "node:child_process";
-import { initDb, getDb } from "../db";
+import { closeDb, getDb, initDb } from "../db";
 import { config } from "../config";
 import { logger } from "../logger";
 import { runPhase2Seed } from "../index";
@@ -67,6 +67,11 @@ void (async () => {
     logger.error({ err }, `${phase} failed`);
     if (telegram.enabled) {
       await telegram.sendText(`Production dry-run FAILED during ${phase}: ${err instanceof Error ? err.message : err}`);
+    }
+    try {
+      await closeDb();
+    } catch (closeErr) {
+      logger.warn({ closeErr }, "Failed to close DB after production dry-run failure");
     }
     process.exit(1);
   };
@@ -137,6 +142,7 @@ void (async () => {
   }
 
   await restartMirofishIfNeeded();
+  await closeDb();
 })();
 
 function formatPortfolioLine(portfolio: PaperPortfolioSummary): string {
