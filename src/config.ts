@@ -30,6 +30,23 @@ const envSchema = z.object({
   MAX_MARKETS_PER_RUN: z.coerce.number().int().min(1).default(100),
   MAX_CANDIDATES_FOR_LIGHT_AI: z.coerce.number().int().min(1).default(15),
   MAX_CANDIDATES_FOR_MIROFISH: z.coerce.number().int().min(1).default(2),
+  ENABLE_TARGETED_MARKET_SCAN: boolEnv.default(true),
+  TARGETED_MARKET_LIMIT_PER_QUERY: z.coerce.number().int().min(1).default(50),
+  TARGETED_MARKET_QUERIES_MACRO: z
+    .string()
+    .default("fed,fomc,interest rates,rate cut,cpi,inflation,unemployment,recession"),
+  TARGETED_MARKET_QUERIES_POLITICS: z
+    .string()
+    .default("senate,house,midterms,2026 election,2028 nomination,trump,biden,vance,rubio,newsom,texas primary"),
+  TARGETED_MARKET_QUERIES_GEOPOLITICS: z
+    .string()
+    .default("china taiwan,russia ukraine,israel iran,ceasefire,nato,war"),
+  TARGETED_MARKET_QUERIES_CRYPTO: z
+    .string()
+    .default("bitcoin,btc,ethereum,crypto etf,crypto regulation"),
+  TARGETED_MARKET_QUERIES_SPORTS: z
+    .string()
+    .default("nba finals,nhl stanley cup,super bowl,champions league"),
   MIN_LIQUIDITY_USD: z.coerce.number().default(10000),
   MIN_DAYS_TO_RESOLUTION: z.coerce.number().default(7),
   MIN_ODDS: z.coerce.number().default(0.2),
