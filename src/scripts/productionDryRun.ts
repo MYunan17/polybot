@@ -8,6 +8,7 @@ import { runPhase2Seed } from "../index";
 import { runPhase3Mirofish } from "./runMirofish";
 import { runPhase4Paper } from "./runPaper";
 import { TelegramClient } from "../services/telegramClient";
+import { PaperPortfolioSummary, PaperTradeRecord, SqliteStore } from "../services/sqliteStore";
 
 interface DbCounts {
   markets: number;
@@ -17,21 +18,6 @@ interface DbCounts {
   paper_trades: number;
   decisions: number;
   errors: number;
-}
-
-interface PaperTradeRow {
-  market_id: string;
-  side: string;
-  probability: number;
-  market_price: number;
-  edge: number;
-  status: string;
-  note: string | null;
-  created_at: string;
-  close_price: number | null;
-  close_reason: string | null;
-  pnl_usd: number | null;
-  closed_at: string | null;
 }
 
 const COUNT_TABLES: Array<keyof DbCounts> = [
@@ -54,22 +40,6 @@ async function fetchCounts(): Promise<DbCounts> {
   return counts as DbCounts;
 }
 
-async function fetchLatestPaperTrades(runId?: string, limit = 5): Promise<PaperTradeRow[]> {
-  if (!runId) return [];
-  const db = await getDb();
-  return db.all<Array<PaperTradeRow>>(
-    `
-    SELECT market_id, side, probability, market_price, edge, status, note, created_at, close_price, close_reason, pnl_usd, closed_at
-    FROM paper_trades
-    WHERE run_id = ?
-    ORDER BY id DESC
-    LIMIT ?
-  `,
-    runId,
-    limit
-  );
-}
-
 async function backupDatabase(): Promise<string | null> {
   const source = config.SQLITE_PATH;
   if (!source || !fs.existsSync(source)) return null;
@@ -84,29 +54,11 @@ function formatCounts(counts: DbCounts): string {
   return COUNT_TABLES.map((table) => `${table}: ${counts[table]}`).join(" | ");
 }
 
-function formatTrades(trades: PaperTradeRow[]): string {
-  if (!trades.length) return "-";
-  return trades
-    .map((t) => {
-      const prob = (t.probability * 100).toFixed(1);
-      const price = (t.market_price * 100).toFixed(1);
-      const edge = (t.edge * 100).toFixed(1);
-      const base = `${t.market_id} ${t.side} prob=${prob}% price=${price}% edge=${edge}% status=${t.status}`;
-      if (t.status === "paper_closed") {
-        const closePrice = t.close_price != null ? `${(t.close_price * 100).toFixed(1)}%` : "n/a";
-        const pnl = t.pnl_usd != null ? t.pnl_usd.toFixed(2) : "n/a";
-        const reason = t.close_reason ?? "n/a";
-        return `${base} closePrice=${closePrice} pnl=${pnl} reason=${reason}`;
-      }
-      return base;
-    })
-    .join("\n");
-}
-
 void (async () => {
   process.env.DRY_RUN = "true";
   await initDb();
   const telegram = new TelegramClient();
+  const store = new SqliteStore();
   const shouldBackup = process.argv.includes("--backup");
   let backupPath: string | null = null;
   let phase3Summary: Awaited<ReturnType<typeof runPhase3Mirofish>> | null = null;
@@ -145,18 +97,22 @@ void (async () => {
   }
 
   const counts = await fetchCounts();
-  const latestTrades = await fetchLatestPaperTrades(phase4Summary?.runId);
+  const portfolio = await store.getPaperPortfolioSummary();
 
   const summary = {
     seed: "ok",
     mirofish: phase3Summary,
     paper: phase4Summary,
     counts,
-    latestTrades,
+    portfolio,
     backup: backupPath ?? undefined
   };
 
   logger.info(summary, "Production dry-run summary");
+
+  const portfolioLine = formatPortfolioLine(portfolio);
+  const latestOpenLine = `Latest open positions: ${formatOpenPositions(portfolio.latestOpen)}`;
+  const latestClosedLine = `Latest closed trades: ${formatClosedTrades(portfolio.latestClosed)}`;
 
   const summaryLines = [
     "Phase 5 Production Dry Run",
@@ -167,10 +123,11 @@ void (async () => {
     phase4Summary
       ? `Paper: simulated ${phase4Summary.simulated}/${phase4Summary.considered}, skipped ${phase4Summary.skipped} (dupes ${phase4Summary.duplicateOpenSkipped}, flips closed ${phase4Summary.closedOnSignalFlip})`
       : "Paper: (not run)",
+    portfolioLine,
+    latestOpenLine,
+    latestClosedLine,
     `DB counts => ${formatCounts(counts)}`,
     backupPath ? `DB backup: ${backupPath}` : "DB backup: skipped",
-    "Latest paper trades:",
-    formatTrades(latestTrades)
   ];
 
   summaryLines.forEach((line) => console.log(line));
@@ -181,6 +138,35 @@ void (async () => {
 
   await restartMirofishIfNeeded();
 })();
+
+function formatPortfolioLine(portfolio: PaperPortfolioSummary): string {
+  const totalPnl = portfolio.totalPnlUsd.toFixed(2);
+  return `Portfolio: open ${portfolio.openCount}, closed ${portfolio.closedCount}, dupClosed ${portfolio.duplicateClosedCount}, totalPnL $${totalPnl}`;
+}
+
+function formatOpenPositions(trades: PaperTradeRecord[]): string {
+  if (!trades.length) return "-";
+  return trades
+    .map((t) => {
+      const prob = (t.probability * 100).toFixed(1);
+      const price = (t.marketPrice * 100).toFixed(1);
+      const edge = (t.edge * 100).toFixed(1);
+      return `${t.marketId} ${t.side} prob=${prob}% price=${price}% edge=${edge}%`;
+    })
+    .join(" | ");
+}
+
+function formatClosedTrades(trades: PaperTradeRecord[]): string {
+  if (!trades.length) return "-";
+  return trades
+    .map((t) => {
+      const pnl = t.pnlUsd != null ? t.pnlUsd.toFixed(2) : "n/a";
+      const closePrice = t.closePrice != null ? `${(t.closePrice * 100).toFixed(1)}%` : "n/a";
+      const reason = t.closeReason ?? "n/a";
+      return `${t.marketId} ${t.side} pnl=${pnl} close=${closePrice} reason=${reason}`;
+    })
+    .join(" | ");
+}
 
 async function restartMirofishIfNeeded(): Promise<void> {
   if (!config.RESTART_MIROFISH_AFTER_RUN) return;

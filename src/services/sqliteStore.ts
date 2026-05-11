@@ -26,6 +26,73 @@ interface OpenPaperTradeRow {
   created_at: string;
 }
 
+interface PaperTradeDbRow {
+  id: number;
+  run_id: string;
+  market_id: string;
+  side: "YES" | "NO";
+  probability: number;
+  market_price: number;
+  edge: number;
+  size_usd: number;
+  status: "paper_open" | "paper_closed" | "paper_skipped";
+  note: string | null;
+  created_at: string;
+  close_price: number | null;
+  close_reason: string | null;
+  pnl_usd: number | null;
+  closed_at: string | null;
+}
+
+export interface PaperTradeRecord {
+  id: number;
+  runId: string;
+  marketId: string;
+  side: "YES" | "NO";
+  probability: number;
+  marketPrice: number;
+  edge: number;
+  sizeUsd: number;
+  status: "paper_open" | "paper_closed" | "paper_skipped";
+  note: string | null;
+  createdAt: string;
+  closePrice: number | null;
+  closeReason: string | null;
+  pnlUsd: number | null;
+  closedAt: string | null;
+  runIdRef?: string; // alias to keep backwards compatibility if needed
+}
+
+export interface PaperPortfolioSummary {
+  openCount: number;
+  closedCount: number;
+  totalPnlUsd: number;
+  duplicateClosedCount: number;
+  latestOpen: PaperTradeRecord[];
+  latestClosed: PaperTradeRecord[];
+}
+
+function mapPaperTradeRow(row: PaperTradeDbRow): PaperTradeRecord {
+  return {
+    id: row.id,
+    runId: row.run_id,
+    marketId: row.market_id,
+    side: row.side,
+    probability: Number(row.probability ?? 0),
+    marketPrice: Number(row.market_price ?? 0),
+    edge: Number(row.edge ?? 0),
+    sizeUsd: Number(row.size_usd ?? 0),
+    status: row.status,
+    note: row.note,
+    createdAt: row.created_at,
+    closePrice: row.close_price != null ? Number(row.close_price) : null,
+    closeReason: row.close_reason,
+    pnlUsd: row.pnl_usd != null ? Number(row.pnl_usd) : null,
+    closedAt: row.closed_at,
+    runIdRef: row.run_id
+  };
+}
+
 export class SqliteStore {
   async upsertMarket(m: ScannedMarket): Promise<void> {
     const db = await getDb();
@@ -52,6 +119,57 @@ export class SqliteStore {
       nowIso(),
       nowIso()
     );
+  }
+
+  async getPaperPortfolioSummary(limit = 5): Promise<PaperPortfolioSummary> {
+    const db = await getDb();
+    const [openRow, closedRow, pnlRow, duplicateRow] = await Promise.all([
+      db.get<{ count: number }>(
+        "SELECT COUNT(*) as count FROM paper_trades WHERE status = 'paper_open'"
+      ),
+      db.get<{ count: number }>(
+        "SELECT COUNT(*) as count FROM paper_trades WHERE status = 'paper_closed'"
+      ),
+      db.get<{ total: number | null }>(
+        "SELECT SUM(pnl_usd) as total FROM paper_trades WHERE status = 'paper_closed'"
+      ),
+      db.get<{ count: number }>(
+        "SELECT COUNT(*) as count FROM paper_trades WHERE status = 'paper_closed' AND close_reason LIKE 'Signal flipped%'"
+      )
+    ]);
+
+    const latestOpenRows = await db.all<PaperTradeDbRow[]>(
+      `
+        SELECT id, run_id, market_id, side, probability, market_price, edge, size_usd, status, note,
+               created_at, close_price, close_reason, pnl_usd, closed_at
+        FROM paper_trades
+        WHERE status = 'paper_open'
+        ORDER BY id DESC
+        LIMIT ?
+      `,
+      limit
+    );
+
+    const latestClosedRows = await db.all<PaperTradeDbRow[]>(
+      `
+        SELECT id, run_id, market_id, side, probability, market_price, edge, size_usd, status, note,
+               created_at, close_price, close_reason, pnl_usd, closed_at
+        FROM paper_trades
+        WHERE status = 'paper_closed'
+        ORDER BY COALESCE(closed_at, created_at) DESC, id DESC
+        LIMIT ?
+      `,
+      limit
+    );
+
+    return {
+      openCount: openRow?.count ?? 0,
+      closedCount: closedRow?.count ?? 0,
+      totalPnlUsd: pnlRow?.total ?? 0,
+      duplicateClosedCount: duplicateRow?.count ?? 0,
+      latestOpen: latestOpenRows.map(mapPaperTradeRow),
+      latestClosed: latestClosedRows.map(mapPaperTradeRow)
+    };
   }
 
   async insertNewsItems(marketId: string, items: ExternalNewsItem[]): Promise<void> {
