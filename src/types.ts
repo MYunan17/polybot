@@ -34,19 +34,21 @@ export interface OrderbookSnapshot {
   raw?: unknown;
 }
 
+export interface ExternalNewsItem {
+  title: string;
+  source: string;
+  publishedAt: string;
+  url: string;
+  summary: string;
+}
+
 export interface EvidencePacket {
   marketId: string;
   question: string;
   currentOdds: number;
   resolutionDate: string;
   keyEntities: string[];
-  newsItems: Array<{
-    title: string;
-    source: string;
-    publishedAt: string;
-    url: string;
-    summary: string;
-  }>;
+  newsItems: ExternalNewsItem[];
   officialSignals: string[];
   marketSignals: {
     liquidity: number;
@@ -79,6 +81,7 @@ export interface SeedPacket {
   resolution_rules: string[];
   evidence_summary: string;
   uncertainty_factors: string[];
+  external_news?: ExternalNewsItem[];
 }
 
 export interface MiroFishResult {

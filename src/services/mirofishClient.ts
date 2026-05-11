@@ -1,6 +1,6 @@
 import axios from "axios";
 import { config } from "../config";
-import { MiroFishResult, SeedPacket } from "../types";
+import { ExternalNewsItem, MiroFishResult, SeedPacket } from "../types";
 import { sleep } from "../utils/rateLimit";
 import { withRetry } from "../utils/retry";
 
@@ -518,6 +518,7 @@ export class MiroFishClient {
   }
 
   private seedToMarkdown(seed: SeedPacket): string {
+    const externalNewsLines = this.formatExternalNews(seed.external_news);
     return [
       `# Prediction Market Seed: ${seed.marketId}`,
       "",
@@ -555,8 +556,29 @@ export class MiroFishClient {
       seed.evidence_summary,
       "",
       `## uncertainty_factors`,
-      seed.uncertainty_factors.join(", ")
+      seed.uncertainty_factors.join(", "),
+      "",
+      `## Recent external news/evidence`,
+      ...externalNewsLines
     ].join("\n");
+  }
+
+  private formatExternalNews(items?: ExternalNewsItem[]): string[] {
+    if (!items?.length) {
+      return ["No additional external news captured."];
+    }
+    return items.map((item) => {
+      const date = this.formatNewsDate(item.publishedAt);
+      const summary = item.summary ? ` — ${item.summary}` : "";
+      const suffix = date ? ` (${date})` : "";
+      return `- ${item.source}: ${item.title}${suffix} - ${item.url}${summary}`;
+    });
+  }
+
+  private formatNewsDate(value: string): string | null {
+    const ms = Date.parse(value);
+    if (!Number.isFinite(ms)) return null;
+    return new Date(ms).toISOString().split("T")[0];
   }
 
   private async get(path: string) {

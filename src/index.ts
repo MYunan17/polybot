@@ -13,6 +13,9 @@ import { RulesResolutionAgent } from "./agents/rulesResolutionAgent";
 import { BullBearAgent } from "./agents/bullBearAgent";
 import { TelegramClient } from "./services/telegramClient";
 import { evidencePacketSchema, rulesAnalysisSchema, seedPacketSchema } from "./utils/validation";
+import { NewsEvidenceAgent } from "./agents/newsEvidenceAgent";
+import { RssNewsService } from "./services/rssNewsService";
+import { ExternalNewsItem } from "./types";
 
 export interface Phase2Options {
   suppressTelegram?: boolean;
@@ -29,6 +32,7 @@ export async function runPhase2Seed(options?: Phase2Options): Promise<void> {
     store
   );
   const evidence = new EvidenceAgent(new GoogleNewsService());
+  const newsAgent = new NewsEvidenceAgent(config, new RssNewsService(), store);
   const rules = new RulesResolutionAgent();
   const bullBear = new BullBearAgent();
   const telegram = new TelegramClient();
@@ -40,6 +44,12 @@ export async function runPhase2Seed(options?: Phase2Options): Promise<void> {
   let seeded = 0;
   let skippedAmbiguity = 0;
   let errors = 0;
+  const newsStats = {
+    newsEnabled: config.ENABLE_NEWS_EVIDENCE,
+    marketsEnriched: 0,
+    newsItemsStored: 0,
+    skippedNoProvider: 0
+  };
 
   for (const market of selected) {
     try {
@@ -55,7 +65,22 @@ export async function runPhase2Seed(options?: Phase2Options): Promise<void> {
       }
 
       const ev = evidencePacketSchema.parse(await evidence.run(market));
-      const seed = seedPacketSchema.parse(await bullBear.run(market, ev, ra));
+      let externalNews: ExternalNewsItem[] | undefined;
+      if (config.ENABLE_NEWS_EVIDENCE) {
+        const newsResult = await newsAgent.enrich(market);
+        if (newsResult.skippedReason === "no_provider") {
+          newsStats.skippedNoProvider += 1;
+        }
+        if (newsResult.items.length) {
+          newsStats.marketsEnriched += 1;
+          newsStats.newsItemsStored += newsResult.stored;
+          externalNews = newsResult.items;
+        }
+      }
+      let seed = seedPacketSchema.parse(await bullBear.run(market, ev, ra));
+      if (externalNews?.length) {
+        seed = { ...seed, external_news: externalNews };
+      }
       await store.insertSeedPacket(runId, market.marketId, seed);
       await store.insertDecision(
         runId,
@@ -110,7 +135,11 @@ export async function runPhase2Seed(options?: Phase2Options): Promise<void> {
       considered: selected.length,
       seeded,
       skippedAmbiguity,
-      errors
+      errors,
+      newsEnabled: newsStats.newsEnabled,
+      marketsEnriched: newsStats.marketsEnriched,
+      newsItemsStored: newsStats.newsItemsStored,
+      skippedNoProvider: newsStats.skippedNoProvider
     },
     "Phase 2 run completed"
   );

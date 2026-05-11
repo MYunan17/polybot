@@ -65,5 +65,12 @@ export const seedPacketSchema: z.ZodType<SeedPacket> = z.object({
   resolution_date: z.string(),
   resolution_rules: z.array(z.string()),
   evidence_summary: z.string(),
-  uncertainty_factors: z.array(z.string())
+  uncertainty_factors: z.array(z.string()),
+  external_news: z.array(z.object({
+    title: z.string(),
+    source: z.string(),
+    publishedAt: z.string(),
+    url: z.string(),
+    summary: z.string()
+  })).optional()
 });

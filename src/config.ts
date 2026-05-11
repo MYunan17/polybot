@@ -58,7 +58,11 @@ const envSchema = z.object({
   ENABLE_MIROFISH: boolEnv.default(false),
   TELEGRAM_VERBOSE: boolEnv.default(false),
   RESTART_MIROFISH_AFTER_RUN: boolEnv.default(false),
-  MIROFISH_CONTAINER_NAME: z.string().default("mirofish")
+  MIROFISH_CONTAINER_NAME: z.string().default("mirofish"),
+  ENABLE_NEWS_EVIDENCE: boolEnv.default(false),
+  NEWS_MAX_ITEMS_PER_MARKET: z.coerce.number().int().min(1).default(5),
+  NEWS_LOOKBACK_DAYS: z.coerce.number().int().min(1).default(14),
+  NEWS_RSS_URLS: z.string().optional().default("")
 });
 
 export const config = envSchema.parse(process.env);

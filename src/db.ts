@@ -130,6 +130,16 @@ export async function initDb(): Promise<void> {
       category_adjustment REAL,
       created_at TEXT NOT NULL
     );
+    CREATE TABLE IF NOT EXISTS news_items (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      market_id TEXT NOT NULL,
+      title TEXT NOT NULL,
+      source TEXT NOT NULL,
+      url TEXT NOT NULL,
+      published_at TEXT NOT NULL,
+      summary TEXT,
+      created_at TEXT NOT NULL
+    );
   `);
   await ensurePaperTradeCloseColumns(db);
 }

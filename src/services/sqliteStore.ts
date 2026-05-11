@@ -1,6 +1,7 @@
 import { getDb } from "../db";
 import {
   ExecutionResult,
+  ExternalNewsItem,
   Judgment,
   MiroFishResult,
   RiskDecision,
@@ -51,6 +52,33 @@ export class SqliteStore {
       nowIso(),
       nowIso()
     );
+  }
+
+  async insertNewsItems(marketId: string, items: ExternalNewsItem[]): Promise<void> {
+    if (!items.length) return;
+    const db = await getDb();
+    await db.run("BEGIN TRANSACTION");
+    try {
+      for (const item of items) {
+        await db.run(
+          `
+            INSERT INTO news_items (market_id, title, source, url, published_at, summary, created_at)
+            VALUES (?, ?, ?, ?, ?, ?, ?)
+          `,
+          marketId,
+          item.title,
+          item.source,
+          item.url,
+          item.publishedAt,
+          item.summary,
+          nowIso()
+        );
+      }
+      await db.run("COMMIT");
+    } catch (err) {
+      await db.run("ROLLBACK");
+      throw err;
+    }
   }
 
   async hasOpenPaperTrade(marketId: string): Promise<boolean> {
