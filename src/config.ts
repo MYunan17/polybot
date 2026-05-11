@@ -63,6 +63,7 @@ const envSchema = z.object({
   NEWS_MAX_ITEMS_PER_MARKET: z.coerce.number().int().min(1).default(5),
   NEWS_LOOKBACK_DAYS: z.coerce.number().int().min(1).default(14),
   NEWS_MIN_RELEVANCE_SCORE: z.coerce.number().int().min(1).default(2),
+  NEWS_STRICT_MODE: boolEnv.default(true),
   NEWS_RSS_URLS: z.string().optional().default("")
 });
 

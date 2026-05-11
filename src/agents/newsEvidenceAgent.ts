@@ -17,6 +17,9 @@ interface KeywordContext {
   personNames: string[];
   personLastNames: string[];
   isElectionMarket: boolean;
+  isSportsMarket: boolean;
+  isCryptoMarket: boolean;
+  hasPersonFocus: boolean;
 }
 
 const STOP_WORDS = new Set([
@@ -64,8 +67,49 @@ const ELECTION_PREFERRED_TERMS = [
   "midterm",
   "congress",
   "cornyn",
-  "paxton"
+  "paxton",
+  "trump",
+  "biden",
+  "vance",
+  "rubio",
+  "newsom",
+  "schumer",
+  "mcconnell",
+  "warnock",
+  "kelly",
+  "abbott"
 ];
+
+const SPORTS_TERMS = [
+  "nfl",
+  "nba",
+  "mlb",
+  "nhl",
+  "world cup",
+  "uefa",
+  "champions league",
+  "premier league",
+  "mls",
+  "super bowl",
+  "finals",
+  "playoffs",
+  "olympics"
+];
+
+const CRYPTO_TERMS = [
+  "bitcoin",
+  "btc",
+  "crypto",
+  "ethereum",
+  "eth",
+  "solana",
+  "token",
+  "stablecoin",
+  "price",
+  "rally"
+];
+
+const NEGATIVE_FILTERS = ["philippines", "cruise", "weather", "steel", "tourism", "hantavirus", "typhoon"];
 
 export class NewsEvidenceAgent {
   constructor(
@@ -94,15 +138,21 @@ export class NewsEvidenceAgent {
       const stats = {
         rssItemsFetched: feedItems.length,
         matchedItems: 0,
-        rejectedLowRelevance: 0
+        rejectedLowRelevance: 0,
+        rejectedCategoryGate: 0,
+        rejectedPersonGate: 0,
+        rejectedNegativeFilter: 0
       };
       for (const item of feedItems) {
         if (!item.url) continue;
         const publishedAtMs = Date.parse(item.publishedAt);
         if (Number.isFinite(publishedAtMs) && publishedAtMs < cutoff) continue;
         const relevance = this.evaluateRelevance(item, keywordContext);
-        if (!relevance.personMatch || !relevance.meetsThreshold) {
-          stats.rejectedLowRelevance += 1;
+        if (!relevance.accepted) {
+          if (relevance.reason === "negative_filter") stats.rejectedNegativeFilter += 1;
+          else if (relevance.reason === "person_gate") stats.rejectedPersonGate += 1;
+          else if (relevance.reason === "category_gate") stats.rejectedCategoryGate += 1;
+          else stats.rejectedLowRelevance += 1;
           logger.debug(
             {
               marketId: market.marketId,
@@ -135,7 +185,10 @@ export class NewsEvidenceAgent {
           marketId: market.marketId,
           rssItemsFetched: stats.rssItemsFetched,
           matchedItems: stats.matchedItems,
-          rejectedLowRelevance: stats.rejectedLowRelevance
+          rejectedLowRelevance: stats.rejectedLowRelevance,
+          rejectedCategoryGate: stats.rejectedCategoryGate,
+          rejectedPersonGate: stats.rejectedPersonGate,
+          rejectedNegativeFilter: stats.rejectedNegativeFilter
         },
         "News enrichment stats"
       );
@@ -186,13 +239,19 @@ export class NewsEvidenceAgent {
         .filter((segment) => segment.length >= 3)
         .forEach((segment) => tokens.push(segment));
     });
+    const baseLower = baseContext.toLowerCase();
     const uniqueTokens = [...new Set(tokens)].slice(0, 40);
+    const isSportsMarket = /nfl|nba|mlb|nhl|world cup|champions league|premier league|super bowl|finals|playoff|olympic/i.test(baseContext);
+    const isCryptoMarket = /bitcoin|btc|crypto|ethereum|eth|token|solana|defi|price|rally/i.test(baseContext);
     return {
       tokens: uniqueTokens,
       strongPhrases: properPhrases,
       personNames: personNames.map((name) => name.toLowerCase()),
       personLastNames,
-      isElectionMarket
+      isElectionMarket,
+      isSportsMarket,
+      isCryptoMarket,
+      hasPersonFocus: personNames.length > 0
     };
   }
 
@@ -214,30 +273,67 @@ export class NewsEvidenceAgent {
   }
 
   private evaluateRelevance(item: ExternalNewsItem, context: KeywordContext): {
+    accepted: boolean;
     score: number;
     strongPhrase: boolean;
-    meetsThreshold: boolean;
     personMatch: boolean;
     reason: string;
   } {
     const haystack = `${item.title} ${item.summary}`.toLowerCase();
+    const negativeHit = this.hitNegativeFilter(haystack, context);
+    if (negativeHit) {
+      return { accepted: false, score: 0, strongPhrase: false, personMatch: false, reason: "negative_filter" };
+    }
     const matchedTokens = new Set<string>();
     for (const token of context.tokens) {
       if (haystack.includes(token)) matchedTokens.add(token);
     }
     const strongPhrase = context.strongPhrases.some((phrase) => haystack.includes(phrase));
-    const electionBoost = context.isElectionMarket && ELECTION_PREFERRED_TERMS.some((term) => haystack.includes(term));
-    const score = matchedTokens.size + (electionBoost ? 1 : 0);
-    const meetsThreshold = score >= this.cfg.NEWS_MIN_RELEVANCE_SCORE || strongPhrase;
+    const electionAnchor = context.isElectionMarket && this.containsAny(haystack, ELECTION_PREFERRED_TERMS);
+    const sportsAnchor = context.isSportsMarket && this.containsAny(haystack, SPORTS_TERMS);
+    const cryptoAnchor = context.isCryptoMarket && this.containsAny(haystack, CRYPTO_TERMS);
+    const score = matchedTokens.size + (electionAnchor ? 1 : 0) + (sportsAnchor ? 1 : 0) + (cryptoAnchor ? 1 : 0);
     const personMatch =
-      !context.personLastNames.length ||
+      !context.hasPersonFocus ||
       context.personLastNames.some((name) => haystack.includes(name)) ||
       context.personNames.some((full) => haystack.includes(full));
-    const reason = !personMatch
-      ? "missing_person_reference"
-      : meetsThreshold
-        ? "accepted"
-        : "score_below_threshold";
-    return { score, strongPhrase, meetsThreshold, personMatch, reason };
+    const passesCategoryGate = this.passesCategoryGate({ electionAnchor, sportsAnchor, cryptoAnchor }, context);
+    const meetsScore = score >= this.cfg.NEWS_MIN_RELEVANCE_SCORE;
+    const strictAccepted = strongPhrase || (meetsScore && passesCategoryGate);
+    const accepted =
+      this.cfg.NEWS_STRICT_MODE
+        ? strictAccepted && (!context.hasPersonFocus || personMatch)
+        : (meetsScore || strongPhrase) && (!context.hasPersonFocus || personMatch);
+    let reason: string;
+    if (negativeHit) {
+      reason = "negative_filter";
+    } else if (context.hasPersonFocus && !personMatch) {
+      reason = "person_gate";
+    } else if (!passesCategoryGate) {
+      reason = "category_gate";
+    } else if (!accepted) {
+      reason = "low_score";
+    } else {
+      reason = "accepted";
+    }
+    return { accepted: accepted && reason === "accepted", score, strongPhrase, personMatch, reason };
+  }
+
+  private passesCategoryGate(
+    anchors: { electionAnchor: boolean; sportsAnchor: boolean; cryptoAnchor: boolean },
+    context: KeywordContext
+  ): boolean {
+    if (context.isElectionMarket && !anchors.electionAnchor) return false;
+    if (context.isSportsMarket && !anchors.sportsAnchor) return false;
+    if (context.isCryptoMarket && !anchors.cryptoAnchor) return false;
+    return true;
+  }
+
+  private hitNegativeFilter(haystack: string, context: KeywordContext): boolean {
+    return NEGATIVE_FILTERS.some((term) => haystack.includes(term) && !context.tokens.includes(term));
+  }
+
+  private containsAny(haystack: string, terms: string[]): boolean {
+    return terms.some((term) => haystack.includes(term));
   }
 }
