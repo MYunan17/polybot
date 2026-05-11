@@ -47,6 +47,11 @@ const envSchema = z.object({
   TARGETED_MARKET_QUERIES_SPORTS: z
     .string()
     .default("nba finals,nhl stanley cup,super bowl,champions league"),
+  TARGETED_BUCKET_MIN_MACRO: z.coerce.number().int().min(0).default(4),
+  TARGETED_BUCKET_MIN_POLITICS: z.coerce.number().int().min(0).default(4),
+  TARGETED_BUCKET_MIN_GEOPOLITICS: z.coerce.number().int().min(0).default(3),
+  TARGETED_BUCKET_MIN_CRYPTO: z.coerce.number().int().min(0).default(2),
+  TARGETED_BUCKET_MAX_SPORTS: z.coerce.number().int().min(0).default(2),
   MIN_LIQUIDITY_USD: z.coerce.number().default(10000),
   MIN_DAYS_TO_RESOLUTION: z.coerce.number().default(7),
   MIN_ODDS: z.coerce.number().default(0.2),
