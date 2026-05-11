@@ -21,6 +21,9 @@ interface KeywordContext {
   isCryptoMarket: boolean;
   hasPersonFocus: boolean;
   marketGate: MarketGate;
+  specificGates: SpecificGate[];
+  skipAllNews: boolean;
+  skipReason?: string;
 }
 
 interface MarketGate {
@@ -28,6 +31,11 @@ interface MarketGate {
   mustIncludeOneOf?: string[];
   combos?: Array<{ all: string[] }>;
   label?: string;
+}
+
+interface SpecificGate {
+  label: string;
+  test: (haystack: string) => boolean;
 }
 
 const STOP_WORDS = new Set([
@@ -119,6 +127,17 @@ const CRYPTO_TERMS = [
 
 const NEGATIVE_FILTERS = ["philippines", "cruise", "weather", "steel", "tourism", "hantavirus", "typhoon"];
 const GENERIC_TERMS = new Set(["trump", "us", "u.s", "usa", "china", "world", "world cup", "politics", "government", "news", "global"]);
+const NOMINATION_TERMS = ["2028", "presidential", "nomination", "primary", "campaign"];
+const ALBUM_TERMS = ["album", "new album", "studio album", "debut album"];
+const TRUMP_REMOVAL_TERMS = [
+  "resign",
+  "removed",
+  "impeachment",
+  "25th amendment",
+  "succession",
+  "leaves office",
+  "out as president"
+];
 
 export class NewsEvidenceAgent {
   constructor(
@@ -152,8 +171,23 @@ export class NewsEvidenceAgent {
         rejectedPersonGate: 0,
         rejectedNegativeFilter: 0,
         rejectedMarketGate: 0,
-        rejectedGenericOnly: 0
+        rejectedGenericOnly: 0,
+        rejectedSpecificGate: 0,
+        skippedMarketNoNews: 0
       };
+      if (keywordContext.skipAllNews) {
+        stats.skippedMarketNoNews = 1;
+        logger.info(
+          {
+            marketId: market.marketId,
+            rssItemsFetched: stats.rssItemsFetched,
+            skippedMarketNoNews: stats.skippedMarketNoNews,
+            skipReason: keywordContext.skipReason
+          },
+          "Skipping news enrichment for excluded novelty market"
+        );
+        return { enabled: true, items: [], skippedReason: keywordContext.skipReason ?? "market_excluded", stored: 0 };
+      }
       for (const item of feedItems) {
         if (!item.url) continue;
         const publishedAtMs = Date.parse(item.publishedAt);
@@ -165,6 +199,7 @@ export class NewsEvidenceAgent {
           else if (relevance.reason === "category_gate") stats.rejectedCategoryGate += 1;
           else if (relevance.reason === "market_gate") stats.rejectedMarketGate += 1;
           else if (relevance.reason === "generic_only") stats.rejectedGenericOnly += 1;
+          else if (relevance.reason === "specific_gate") stats.rejectedSpecificGate += 1;
           else stats.rejectedLowRelevance += 1;
           logger.debug(
             {
@@ -173,7 +208,8 @@ export class NewsEvidenceAgent {
               score: relevance.score,
               strongPhrase: relevance.strongPhrase,
               personMatch: relevance.personMatch,
-              reason: relevance.reason
+              reason: relevance.reason,
+              specificGate: relevance.specificGateLabel
             },
             "Rejected news item for low relevance"
           );
@@ -203,7 +239,9 @@ export class NewsEvidenceAgent {
           rejectedPersonGate: stats.rejectedPersonGate,
           rejectedNegativeFilter: stats.rejectedNegativeFilter,
           rejectedMarketGate: stats.rejectedMarketGate,
-          rejectedGenericOnly: stats.rejectedGenericOnly
+          rejectedGenericOnly: stats.rejectedGenericOnly,
+          rejectedSpecificGate: stats.rejectedSpecificGate,
+          skippedMarketNoNews: stats.skippedMarketNoNews
         },
         "News enrichment stats"
       );
@@ -258,7 +296,12 @@ export class NewsEvidenceAgent {
     const uniqueTokens = [...new Set(tokens)].slice(0, 40);
     const isSportsMarket = /nfl|nba|mlb|nhl|world cup|champions league|premier league|super bowl|finals|playoff|olympic/i.test(baseContext);
     const isCryptoMarket = /bitcoin|btc|crypto|ethereum|eth|token|solana|defi|price|rally/i.test(baseContext);
-    const marketGate = this.deriveMarketGate(market, rawEntities.map((e) => e.toLowerCase()), personNames);
+    const filters = this.deriveMarketFilters(
+      market,
+      rawEntities.map((e) => e.toLowerCase()),
+      personNames,
+      personLastNames
+    );
     return {
       tokens: uniqueTokens,
       strongPhrases: properPhrases,
@@ -268,7 +311,10 @@ export class NewsEvidenceAgent {
       isSportsMarket,
       isCryptoMarket,
       hasPersonFocus: personNames.length > 0,
-      marketGate
+      marketGate: filters.marketGate,
+      specificGates: filters.specificGates,
+      skipAllNews: filters.skipAllNews,
+      skipReason: filters.skipReason
     };
   }
 
@@ -296,9 +342,45 @@ export class NewsEvidenceAgent {
     return values.filter((value): value is string => typeof value === "string").slice(0, 10);
   }
 
-  private deriveMarketGate(market: ScannedMarket, keyEntities: string[], personNames: string[]): MarketGate {
+  private deriveMarketFilters(
+    market: ScannedMarket,
+    keyEntities: string[],
+    personNames: string[],
+    personLastNames: string[]
+  ): {
+    marketGate: MarketGate;
+    specificGates: SpecificGate[];
+    skipAllNews: boolean;
+    skipReason?: string;
+  } {
     const question = market.question.toLowerCase();
     const gate: MarketGate = {};
+    const specificGates: SpecificGate[] = [];
+    let skipAllNews = false;
+    let skipReason: string | undefined;
+    const setSkip = (reason: string) => {
+      if (!skipAllNews) {
+        skipAllNews = true;
+        skipReason = reason;
+      }
+    };
+    const mentionsGta = question.includes("gta vi") || question.includes("grand theft auto vi") || question.includes("gta 6") || question.includes("grand theft auto 6");
+    const isBeforeGta = mentionsGta && question.includes("before");
+    const isTrumpOutGta =
+      isBeforeGta && question.includes("trump") && question.includes("president") && question.includes("out");
+    if (isBeforeGta && !isTrumpOutGta) {
+      setSkip("market_excluded_gta");
+    }
+    if (question.includes("jesus christ")) {
+      setSkip("market_excluded_jesus");
+    }
+    if (isTrumpOutGta) {
+      specificGates.push({
+        label: "trump_out_before_gta",
+        test: (haystack) =>
+          haystack.includes("trump") && TRUMP_REMOVAL_TERMS.some((term) => haystack.includes(term))
+      });
+    }
     const anyTexasPrimary = question.includes("texas") && question.includes("primary");
     if (question.includes("senate") && question.includes("control")) {
       gate.mustIncludeAll = ["senate"];
@@ -324,7 +406,28 @@ export class NewsEvidenceAgent {
       gate.combos = [{ all: ["cross-strait"] }, { all: ["taiwan strait"] }, { all: ["invasion"] }];
       gate.label = "china_taiwan";
     }
-    return gate;
+    const normalizedPersons = personNames.map((name) => name.toLowerCase());
+    const normalizedEntities = keyEntities.map((entity) => entity.toLowerCase());
+    const albumMarket = question.includes("album");
+    if (albumMarket && (normalizedPersons.length || normalizedEntities.length)) {
+      const artistTokens = Array.from(new Set([...normalizedPersons, ...normalizedEntities, ...personLastNames]));
+      specificGates.push({
+        label: "music_album_release",
+        test: (haystack) =>
+          artistTokens.some((token) => token && haystack.includes(token)) &&
+          ALBUM_TERMS.some((term) => haystack.includes(term))
+      });
+    }
+    const isPres2028 = question.includes("2028") &&
+      (question.includes("nomination") || question.includes("presidential") || question.includes("primary") || question.includes("campaign"));
+    if (isPres2028 && personLastNames.length) {
+      specificGates.push({
+        label: "pres_2028_nomination",
+        test: (haystack) =>
+          personLastNames.some((name) => haystack.includes(name)) && NOMINATION_TERMS.some((term) => haystack.includes(term))
+      });
+    }
+    return { marketGate: gate, specificGates, skipAllNews, skipReason };
   }
 
   private evaluateRelevance(item: ExternalNewsItem, context: KeywordContext): {
@@ -333,6 +436,7 @@ export class NewsEvidenceAgent {
     strongPhrase: boolean;
     personMatch: boolean;
     reason: string;
+    specificGateLabel?: string;
   } {
     const haystack = `${item.title} ${item.summary}`.toLowerCase();
     const negativeHit = this.hitNegativeFilter(haystack, context);
@@ -354,9 +458,11 @@ export class NewsEvidenceAgent {
       context.personNames.some((full) => haystack.includes(full));
     const passesCategoryGate = this.passesCategoryGate({ electionAnchor, sportsAnchor, cryptoAnchor }, context);
     const passesMarketGate = this.passesMarketGate(haystack, context.marketGate);
+    const specificGateResult = this.passesSpecificGates(haystack, context.specificGates);
     const genericOnly = matchedTokens.size > 0 && [...matchedTokens].every((token) => GENERIC_TERMS.has(token));
     const meetsScore = score >= this.cfg.NEWS_MIN_RELEVANCE_SCORE;
-    const strictAccepted = strongPhrase || (meetsScore && passesCategoryGate && passesMarketGate && !genericOnly);
+    const strictAccepted =
+      strongPhrase || (meetsScore && passesCategoryGate && passesMarketGate && specificGateResult.ok && !genericOnly);
     const accepted =
       this.cfg.NEWS_STRICT_MODE
         ? strictAccepted && (!context.hasPersonFocus || personMatch)
@@ -370,6 +476,8 @@ export class NewsEvidenceAgent {
       reason = "category_gate";
     } else if (!passesMarketGate) {
       reason = "market_gate";
+    } else if (!specificGateResult.ok) {
+      reason = "specific_gate";
     } else if (genericOnly) {
       reason = "generic_only";
     } else if (!accepted) {
@@ -377,7 +485,14 @@ export class NewsEvidenceAgent {
     } else {
       reason = "accepted";
     }
-    return { accepted: accepted && reason === "accepted", score, strongPhrase, personMatch, reason };
+    return {
+      accepted: accepted && reason === "accepted",
+      score,
+      strongPhrase,
+      personMatch,
+      reason,
+      specificGateLabel: !specificGateResult.ok ? specificGateResult.label : undefined
+    };
   }
 
   private passesCategoryGate(
@@ -407,6 +522,15 @@ export class NewsEvidenceAgent {
       }
     }
     return true;
+  }
+
+  private passesSpecificGates(haystack: string, gates: SpecificGate[]): { ok: boolean; label?: string } {
+    for (const gate of gates) {
+      if (!gate.test(haystack)) {
+        return { ok: false, label: gate.label };
+      }
+    }
+    return { ok: true };
   }
 
   private containsAny(haystack: string, terms: string[]): boolean {
