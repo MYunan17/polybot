@@ -35,7 +35,13 @@ interface MarketGate {
 
 interface SpecificGate {
   label: string;
-  test: (haystack: string) => boolean;
+  test: (input: SpecificGateInput) => boolean;
+}
+
+interface SpecificGateInput {
+  haystack: string;
+  title: string;
+  summary: string;
 }
 
 const STOP_WORDS = new Set([
@@ -127,7 +133,14 @@ const CRYPTO_TERMS = [
 
 const NEGATIVE_FILTERS = ["philippines", "cruise", "weather", "steel", "tourism", "hantavirus", "typhoon"];
 const GENERIC_TERMS = new Set(["trump", "us", "u.s", "usa", "china", "world", "world cup", "politics", "government", "news", "global"]);
-const NOMINATION_TERMS = ["2028", "presidential", "nomination", "primary", "campaign"];
+const NOMINATION_TERMS = [
+  "2028",
+  "presidential nomination",
+  "presidential primary",
+  "campaign",
+  "run for president",
+  "nominee"
+];
 const ALBUM_TERMS = ["album", "new album", "studio album", "debut album"];
 const TRUMP_REMOVAL_TERMS = [
   "resign",
@@ -377,7 +390,7 @@ export class NewsEvidenceAgent {
     if (isTrumpOutGta) {
       specificGates.push({
         label: "trump_out_before_gta",
-        test: (haystack) =>
+        test: ({ haystack }) =>
           haystack.includes("trump") && TRUMP_REMOVAL_TERMS.some((term) => haystack.includes(term))
       });
     }
@@ -413,9 +426,13 @@ export class NewsEvidenceAgent {
       const artistTokens = Array.from(new Set([...normalizedPersons, ...normalizedEntities, ...personLastNames]));
       specificGates.push({
         label: "music_album_release",
-        test: (haystack) =>
-          artistTokens.some((token) => token && haystack.includes(token)) &&
-          ALBUM_TERMS.some((term) => haystack.includes(term))
+        test: ({ title, summary, haystack }) => {
+          const artistHit = artistTokens.some(
+            (token) => Boolean(token) && (title.includes(token) || summary.includes(token))
+          );
+          const albumHit = ALBUM_TERMS.some((term) => haystack.includes(term));
+          return artistHit && albumHit;
+        }
       });
     }
     const isPres2028 = question.includes("2028") &&
@@ -423,8 +440,13 @@ export class NewsEvidenceAgent {
     if (isPres2028 && personLastNames.length) {
       specificGates.push({
         label: "pres_2028_nomination",
-        test: (haystack) =>
-          personLastNames.some((name) => haystack.includes(name)) && NOMINATION_TERMS.some((term) => haystack.includes(term))
+        test: ({ title, summary, haystack }) => {
+          const lastNameHit = personLastNames.some(
+            (name) => title.includes(name) || summary.includes(name)
+          );
+          const framingHit = NOMINATION_TERMS.some((term) => haystack.includes(term));
+          return lastNameHit && framingHit;
+        }
       });
     }
     return { marketGate: gate, specificGates, skipAllNews, skipReason };
@@ -438,7 +460,9 @@ export class NewsEvidenceAgent {
     reason: string;
     specificGateLabel?: string;
   } {
-    const haystack = `${item.title} ${item.summary}`.toLowerCase();
+    const title = (item.title ?? "").toLowerCase();
+    const summary = (item.summary ?? "").toLowerCase();
+    const haystack = `${title} ${summary}`.trim();
     const negativeHit = this.hitNegativeFilter(haystack, context);
     if (negativeHit) {
       return { accepted: false, score: 0, strongPhrase: false, personMatch: false, reason: "negative_filter" };
@@ -458,7 +482,7 @@ export class NewsEvidenceAgent {
       context.personNames.some((full) => haystack.includes(full));
     const passesCategoryGate = this.passesCategoryGate({ electionAnchor, sportsAnchor, cryptoAnchor }, context);
     const passesMarketGate = this.passesMarketGate(haystack, context.marketGate);
-    const specificGateResult = this.passesSpecificGates(haystack, context.specificGates);
+    const specificGateResult = this.passesSpecificGates({ haystack, title, summary }, context.specificGates);
     const genericOnly = matchedTokens.size > 0 && [...matchedTokens].every((token) => GENERIC_TERMS.has(token));
     const meetsScore = score >= this.cfg.NEWS_MIN_RELEVANCE_SCORE;
     const strictAccepted =
@@ -524,9 +548,9 @@ export class NewsEvidenceAgent {
     return true;
   }
 
-  private passesSpecificGates(haystack: string, gates: SpecificGate[]): { ok: boolean; label?: string } {
+  private passesSpecificGates(input: SpecificGateInput, gates: SpecificGate[]): { ok: boolean; label?: string } {
     for (const gate of gates) {
-      if (!gate.test(haystack)) {
+      if (!gate.test(input)) {
         return { ok: false, label: gate.label };
       }
     }
