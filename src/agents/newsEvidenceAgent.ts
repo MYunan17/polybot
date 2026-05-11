@@ -44,6 +44,11 @@ interface SpecificGateInput {
   summary: string;
 }
 
+interface TargetCandidate {
+  fullName?: string;
+  lastName?: string;
+}
+
 const STOP_WORDS = new Set([
   "will",
   "won",
@@ -139,7 +144,8 @@ const NOMINATION_TERMS = [
   "presidential primary",
   "campaign",
   "run for president",
-  "nominee"
+  "nominee",
+  "successor"
 ];
 const ALBUM_TERMS = ["album", "new album", "studio album", "debut album"];
 const TRUMP_REMOVAL_TERMS = [
@@ -282,6 +288,7 @@ export class NewsEvidenceAgent {
     const events = Array.isArray((raw as any)?.events) ? ((raw as any).events as Array<Record<string, unknown>>) : [];
     const eventTitle = typeof events[0]?.title === "string" ? (events[0].title as string) : undefined;
     const rawEntities = this.extractKeyEntities(raw);
+    const targetCandidate = this.extractTargetCandidate(market.question);
     const baseContext = [market.question, groupTitle, eventTitle, market.category]
       .filter((value): value is string => typeof value === "string" && value.length > 0)
       .join(" ");
@@ -306,6 +313,9 @@ export class NewsEvidenceAgent {
         .filter((segment) => segment.length >= 3)
         .forEach((segment) => tokens.push(segment));
     });
+    if (targetCandidate?.fullName) {
+      tokens.push(...targetCandidate.fullName.split(/\s+/));
+    }
     const uniqueTokens = [...new Set(tokens)].slice(0, 40);
     const isSportsMarket = /nfl|nba|mlb|nhl|world cup|champions league|premier league|super bowl|finals|playoff|olympic/i.test(baseContext);
     const isCryptoMarket = /bitcoin|btc|crypto|ethereum|eth|token|solana|defi|price|rally/i.test(baseContext);
@@ -313,7 +323,8 @@ export class NewsEvidenceAgent {
       market,
       rawEntities.map((e) => e.toLowerCase()),
       personNames,
-      personLastNames
+      personLastNames,
+      targetCandidate
     );
     return {
       tokens: uniqueTokens,
@@ -359,7 +370,8 @@ export class NewsEvidenceAgent {
     market: ScannedMarket,
     keyEntities: string[],
     personNames: string[],
-    personLastNames: string[]
+    personLastNames: string[],
+    targetCandidate?: TargetCandidate
   ): {
     marketGate: MarketGate;
     specificGates: SpecificGate[];
@@ -437,19 +449,38 @@ export class NewsEvidenceAgent {
     }
     const isPres2028 = question.includes("2028") &&
       (question.includes("nomination") || question.includes("presidential") || question.includes("primary") || question.includes("campaign"));
-    if (isPres2028 && personLastNames.length) {
+    if (isPres2028) {
+      const candidateTerms = targetCandidate
+        ? [targetCandidate.fullName, targetCandidate.lastName].filter((value): value is string => Boolean(value))
+        : personLastNames;
       specificGates.push({
         label: "pres_2028_nomination",
         test: ({ title, summary, haystack }) => {
-          const lastNameHit = personLastNames.some(
-            (name) => title.includes(name) || summary.includes(name)
-          );
+          const candidateHit = candidateTerms.some((name) => title.includes(name) || summary.includes(name));
           const framingHit = NOMINATION_TERMS.some((term) => haystack.includes(term));
-          return lastNameHit && framingHit;
+          return candidateHit && framingHit;
         }
       });
     }
     return { marketGate: gate, specificGates, skipAllNews, skipReason };
+  }
+
+  private extractTargetCandidate(question: string): TargetCandidate | undefined {
+    const normalizedQuestion = question.trim();
+    const regex = /will\s+([^?]+?)\s+win\s+the\s+2028/i;
+    const match = normalizedQuestion.match(regex);
+    const candidateRaw = match?.[1]?.trim() ?? this.extractPersonNames(question)[0];
+    if (!candidateRaw) {
+      return undefined;
+    }
+    const cleaned = candidateRaw.replace(/[?.,]+$/g, "").trim();
+    if (!cleaned.length) {
+      return undefined;
+    }
+    const fullName = cleaned.toLowerCase();
+    const segments = cleaned.split(/\s+/);
+    const lastName = segments[segments.length - 1]?.toLowerCase();
+    return { fullName, lastName };
   }
 
   private evaluateRelevance(item: ExternalNewsItem, context: KeywordContext): {
