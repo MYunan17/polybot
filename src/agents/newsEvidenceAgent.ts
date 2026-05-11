@@ -20,6 +20,14 @@ interface KeywordContext {
   isSportsMarket: boolean;
   isCryptoMarket: boolean;
   hasPersonFocus: boolean;
+  marketGate: MarketGate;
+}
+
+interface MarketGate {
+  mustIncludeAll?: string[];
+  mustIncludeOneOf?: string[];
+  combos?: Array<{ all: string[] }>;
+  label?: string;
 }
 
 const STOP_WORDS = new Set([
@@ -110,6 +118,7 @@ const CRYPTO_TERMS = [
 ];
 
 const NEGATIVE_FILTERS = ["philippines", "cruise", "weather", "steel", "tourism", "hantavirus", "typhoon"];
+const GENERIC_TERMS = new Set(["trump", "us", "u.s", "usa", "china", "world", "world cup", "politics", "government", "news", "global"]);
 
 export class NewsEvidenceAgent {
   constructor(
@@ -141,7 +150,9 @@ export class NewsEvidenceAgent {
         rejectedLowRelevance: 0,
         rejectedCategoryGate: 0,
         rejectedPersonGate: 0,
-        rejectedNegativeFilter: 0
+        rejectedNegativeFilter: 0,
+        rejectedMarketGate: 0,
+        rejectedGenericOnly: 0
       };
       for (const item of feedItems) {
         if (!item.url) continue;
@@ -152,6 +163,8 @@ export class NewsEvidenceAgent {
           if (relevance.reason === "negative_filter") stats.rejectedNegativeFilter += 1;
           else if (relevance.reason === "person_gate") stats.rejectedPersonGate += 1;
           else if (relevance.reason === "category_gate") stats.rejectedCategoryGate += 1;
+          else if (relevance.reason === "market_gate") stats.rejectedMarketGate += 1;
+          else if (relevance.reason === "generic_only") stats.rejectedGenericOnly += 1;
           else stats.rejectedLowRelevance += 1;
           logger.debug(
             {
@@ -188,7 +201,9 @@ export class NewsEvidenceAgent {
           rejectedLowRelevance: stats.rejectedLowRelevance,
           rejectedCategoryGate: stats.rejectedCategoryGate,
           rejectedPersonGate: stats.rejectedPersonGate,
-          rejectedNegativeFilter: stats.rejectedNegativeFilter
+          rejectedNegativeFilter: stats.rejectedNegativeFilter,
+          rejectedMarketGate: stats.rejectedMarketGate,
+          rejectedGenericOnly: stats.rejectedGenericOnly
         },
         "News enrichment stats"
       );
@@ -215,6 +230,7 @@ export class NewsEvidenceAgent {
     const groupTitle = typeof raw?.groupItemTitle === "string" ? raw.groupItemTitle : undefined;
     const events = Array.isArray((raw as any)?.events) ? ((raw as any).events as Array<Record<string, unknown>>) : [];
     const eventTitle = typeof events[0]?.title === "string" ? (events[0].title as string) : undefined;
+    const rawEntities = this.extractKeyEntities(raw);
     const baseContext = [market.question, groupTitle, eventTitle, market.category]
       .filter((value): value is string => typeof value === "string" && value.length > 0)
       .join(" ");
@@ -239,10 +255,10 @@ export class NewsEvidenceAgent {
         .filter((segment) => segment.length >= 3)
         .forEach((segment) => tokens.push(segment));
     });
-    const baseLower = baseContext.toLowerCase();
     const uniqueTokens = [...new Set(tokens)].slice(0, 40);
     const isSportsMarket = /nfl|nba|mlb|nhl|world cup|champions league|premier league|super bowl|finals|playoff|olympic/i.test(baseContext);
     const isCryptoMarket = /bitcoin|btc|crypto|ethereum|eth|token|solana|defi|price|rally/i.test(baseContext);
+    const marketGate = this.deriveMarketGate(market, rawEntities.map((e) => e.toLowerCase()), personNames);
     return {
       tokens: uniqueTokens,
       strongPhrases: properPhrases,
@@ -251,7 +267,8 @@ export class NewsEvidenceAgent {
       isElectionMarket,
       isSportsMarket,
       isCryptoMarket,
-      hasPersonFocus: personNames.length > 0
+      hasPersonFocus: personNames.length > 0,
+      marketGate
     };
   }
 
@@ -270,6 +287,44 @@ export class NewsEvidenceAgent {
         const parts = phrase.split(/\s+/);
         return parts.length >= 2 && !PERSON_EXCLUDE.has(parts[parts.length - 1]);
       });
+  }
+
+  private extractKeyEntities(raw: Record<string, unknown>): string[] {
+    const direct = Array.isArray((raw as any)?.key_entities) ? (raw as any).key_entities : undefined;
+    const camel = Array.isArray((raw as any)?.keyEntities) ? (raw as any).keyEntities : undefined;
+    const values = (direct ?? camel ?? []) as Array<unknown>;
+    return values.filter((value): value is string => typeof value === "string").slice(0, 10);
+  }
+
+  private deriveMarketGate(market: ScannedMarket, keyEntities: string[], personNames: string[]): MarketGate {
+    const question = market.question.toLowerCase();
+    const gate: MarketGate = {};
+    const anyTexasPrimary = question.includes("texas") && question.includes("primary");
+    if (question.includes("senate") && question.includes("control")) {
+      gate.mustIncludeAll = ["senate"];
+      gate.mustIncludeOneOf = ["midterm", "election", "democrat", "democratic", "republican", "control", "race"];
+      gate.label = "senate_control";
+    } else if (anyTexasPrimary || keyEntities.some((e) => e.includes("texas"))) {
+      gate.mustIncludeAll = ["texas"];
+      gate.mustIncludeOneOf = ["cornyn", "paxton", "republican primary", "senate primary", "gop primary"];
+      gate.label = "texas_primary";
+    } else if (/nba/.test(question) || question.includes("finals")) {
+      const teams = personNames.map((n) => n.toLowerCase());
+      gate.mustIncludeOneOf = ["nba", "nba finals", ...teams];
+      gate.label = "nba_finals";
+    } else if (/nhl|stanley cup/.test(question)) {
+      const teams = personNames.map((n) => n.toLowerCase());
+      gate.mustIncludeOneOf = ["nhl", "stanley cup", ...teams];
+      gate.label = "nhl_cup";
+    } else if (question.includes("bitcoin")) {
+      gate.mustIncludeOneOf = ["bitcoin", "btc"];
+      gate.label = "bitcoin";
+    } else if (question.includes("china") && question.includes("taiwan")) {
+      gate.mustIncludeAll = ["china", "taiwan"];
+      gate.combos = [{ all: ["cross-strait"] }, { all: ["taiwan strait"] }, { all: ["invasion"] }];
+      gate.label = "china_taiwan";
+    }
+    return gate;
   }
 
   private evaluateRelevance(item: ExternalNewsItem, context: KeywordContext): {
@@ -298,8 +353,10 @@ export class NewsEvidenceAgent {
       context.personLastNames.some((name) => haystack.includes(name)) ||
       context.personNames.some((full) => haystack.includes(full));
     const passesCategoryGate = this.passesCategoryGate({ electionAnchor, sportsAnchor, cryptoAnchor }, context);
+    const passesMarketGate = this.passesMarketGate(haystack, context.marketGate);
+    const genericOnly = matchedTokens.size > 0 && [...matchedTokens].every((token) => GENERIC_TERMS.has(token));
     const meetsScore = score >= this.cfg.NEWS_MIN_RELEVANCE_SCORE;
-    const strictAccepted = strongPhrase || (meetsScore && passesCategoryGate);
+    const strictAccepted = strongPhrase || (meetsScore && passesCategoryGate && passesMarketGate && !genericOnly);
     const accepted =
       this.cfg.NEWS_STRICT_MODE
         ? strictAccepted && (!context.hasPersonFocus || personMatch)
@@ -311,6 +368,10 @@ export class NewsEvidenceAgent {
       reason = "person_gate";
     } else if (!passesCategoryGate) {
       reason = "category_gate";
+    } else if (!passesMarketGate) {
+      reason = "market_gate";
+    } else if (genericOnly) {
+      reason = "generic_only";
     } else if (!accepted) {
       reason = "low_score";
     } else {
@@ -331,6 +392,21 @@ export class NewsEvidenceAgent {
 
   private hitNegativeFilter(haystack: string, context: KeywordContext): boolean {
     return NEGATIVE_FILTERS.some((term) => haystack.includes(term) && !context.tokens.includes(term));
+  }
+
+  private passesMarketGate(haystack: string, gate: MarketGate): boolean {
+    if (!gate.mustIncludeAll && !gate.mustIncludeOneOf && !gate.combos) return true;
+    if (gate.mustIncludeAll && !gate.mustIncludeAll.every((term) => haystack.includes(term))) return false;
+    if (gate.mustIncludeOneOf && !gate.mustIncludeOneOf.some((term) => haystack.includes(term))) return false;
+    if (gate.combos && gate.combos.length > 0) {
+      const comboHit = gate.combos.some((combo) => combo.all.every((term) => haystack.includes(term)));
+      if (gate.mustIncludeAll || gate.mustIncludeOneOf) {
+        // combos act as overrides; already checked
+      } else if (!comboHit) {
+        return false;
+      }
+    }
+    return true;
   }
 
   private containsAny(haystack: string, terms: string[]): boolean {
