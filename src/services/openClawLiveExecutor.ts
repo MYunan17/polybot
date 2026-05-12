@@ -13,6 +13,17 @@ export interface OpenClawLiveExecutionStats {
   skippedDailyCap: number;
 }
 
+export function getMissingOpenClawCredentials(cfg: AppConfig): string[] {
+  const missing: string[] = [];
+  if (!cfg.OPENCLAW_API_KEY?.trim()) {
+    missing.push("OPENCLAW_API_KEY");
+  }
+  if (!cfg.POLYMARKET_PRIVATE_KEY?.trim()) {
+    missing.push("POLYMARKET_PRIVATE_KEY");
+  }
+  return missing;
+}
+
 export class OpenClawLiveExecutor {
   constructor(
     private readonly cfg: AppConfig,
@@ -49,55 +60,81 @@ export class OpenClawLiveExecutor {
       skippedDailyCap: 0
     };
 
+    const missingCredentials = getMissingOpenClawCredentials(this.cfg);
+    const credentialsReady = missingCredentials.length === 0;
+    if (this.cfg.OPENCLAW_KILL_SWITCH) {
+      logger.warn(
+        { killSwitch: true, plans: plans.length },
+        "OpenClaw kill switch enabled; all approved plans will be recorded as skipped"
+      );
+    } else if (!credentialsReady) {
+      logger.error(
+        { missingCredentials, plans: plans.length },
+        "OpenClaw live executor missing credentials; refusing to submit live orders"
+      );
+    } else {
+      logger.info({ killSwitch: false, plans: plans.length }, "OpenClaw live executor ready for live submissions");
+    }
+
     let { orderCount, usdTotal } = await this.store.getOpenClawDailyUsage();
 
     for (const plan of plans) {
       if (this.cfg.OPENCLAW_KILL_SWITCH) {
-        await this.record(plan, "skipped_kill_switch", "Kill switch enabled", undefined, 0);
+        await this.record(plan, "skipped_kill_switch", "Kill switch enabled");
         stats.skippedKillSwitch += 1;
         continue;
       }
 
+      if (!credentialsReady) {
+        await this.record(
+          plan,
+          "failed",
+          `Missing credentials: ${missingCredentials.join(", ") || "unknown requirements"}`
+        );
+        stats.failed += 1;
+        continue;
+      }
+
       if (plan.side === "BOTH") {
-        await this.record(plan, "failed", "Ambiguous side=BOTH plan", undefined, 0);
+        await this.record(plan, "failed", "Ambiguous side=BOTH plan");
         stats.failed += 1;
         continue;
       }
 
       if (!plan.tokenId) {
-        await this.record(plan, "failed", "Missing token id", undefined, 0);
+        await this.record(plan, "failed", "Missing token id");
         stats.failed += 1;
         continue;
       }
 
       if (plan.limitPrice <= 0 || plan.limitPrice >= 1) {
-        await this.record(plan, "failed", "Invalid limit price", undefined, 0);
+        await this.record(plan, "failed", "Invalid limit price");
         stats.failed += 1;
         continue;
       }
 
       const cappedOrderSize = Math.min(plan.sizeUsd, this.cfg.OPENCLAW_MAX_ORDER_USD);
       if (cappedOrderSize <= 0) {
-        await this.record(plan, "failed", "Plan size is non-positive", undefined, 0);
+        await this.record(plan, "failed", "Plan size is non-positive");
         stats.failed += 1;
         continue;
       }
 
       if (this.cfg.OPENCLAW_MAX_DAILY_ORDERS >= 0 && orderCount >= this.cfg.OPENCLAW_MAX_DAILY_ORDERS) {
-        await this.record(plan, "skipped_daily_cap", "Daily order count cap reached", undefined, 0);
+        await this.record(plan, "skipped_daily_cap", "Daily order count cap reached");
         stats.skippedDailyCap += 1;
         continue;
       }
 
       if (this.cfg.OPENCLAW_MAX_DAILY_USD >= 0 && usdTotal + cappedOrderSize > this.cfg.OPENCLAW_MAX_DAILY_USD) {
-        await this.record(plan, "skipped_daily_cap", "Daily USD cap reached", undefined, 0);
+        await this.record(plan, "skipped_daily_cap", "Daily USD cap reached");
         stats.skippedDailyCap += 1;
         continue;
       }
 
       const request = await this.buildExecutionRequest(plan, cappedOrderSize);
       if (!request) {
-        await this.record(plan, "failed", "Unable to build execution request", undefined, 0);
+        await this.record(plan, "failed", "Unable to build execution request");
         stats.failed += 1;
         continue;
       }
@@ -175,7 +212,7 @@ export class OpenClawLiveExecutor {
     status: ExecutionResult["status"],
     message: string,
     txOrOrderId?: string,
-    sizeOverride?: number
+    executedSizeUsd?: number
   ) {
     await this.store.insertOpenClawExecution({
       planId: plan.id,
@@ -184,7 +221,7 @@ export class OpenClawLiveExecutor {
       action: plan.action,
       side: plan.side,
       tokenId: plan.tokenId,
-      sizeUsd: sizeOverride ?? plan.sizeUsd,
+      sizeUsd: executedSizeUsd ?? plan.sizeUsd,
       limitPrice: plan.limitPrice,
       status,
       txOrOrderId,
