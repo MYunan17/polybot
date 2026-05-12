@@ -11,7 +11,8 @@ type TargetBucket = "macro" | "politics" | "geopolitics" | "crypto" | "sports";
 interface ScoredMarket {
   market: ScannedMarket;
   score: number;
-  bucket?: TargetBucket;
+  sourceBucket?: TargetBucket;
+  inferredBucket?: TargetBucket;
   source: "general" | "targeted";
 }
 
@@ -40,14 +41,17 @@ const TARGET_BUCKET_SCORES: Record<TargetBucket, number> = {
 const BUCKET_KEYWORDS: Record<TargetBucket, string[]> = {
   macro: [
     "fed",
+    "federal reserve",
     "fomc",
     "interest rate",
     "rate cut",
+    "rate hike",
     "cpi",
     "inflation",
-    "jobs report",
     "unemployment",
-    "recession"
+    "recession",
+    "jobs report",
+    "treasury yield"
   ],
   politics: [
     "senate",
@@ -56,7 +60,11 @@ const BUCKET_KEYWORDS: Record<TargetBucket, string[]> = {
     "election",
     "primary",
     "presidential nomination",
-    "nomination",
+    "president",
+    "republican",
+    "democratic",
+    "democrat",
+    "gop",
     "trump",
     "biden",
     "vance",
@@ -65,7 +73,18 @@ const BUCKET_KEYWORDS: Record<TargetBucket, string[]> = {
     "paxton",
     "cornyn"
   ],
-  geopolitics: ["china", "taiwan", "russia", "ukraine", "israel", "iran", "ceasefire", "nato", "war"],
+  geopolitics: [
+    "china",
+    "taiwan",
+    "russia",
+    "ukraine",
+    "israel",
+    "iran",
+    "ceasefire",
+    "nato",
+    "war",
+    "invasion"
+  ],
   crypto: ["bitcoin", "btc", "ethereum", "eth", "crypto", "etf"],
   sports: [
     "nba",
@@ -74,7 +93,8 @@ const BUCKET_KEYWORDS: Record<TargetBucket, string[]> = {
     "champions league",
     "premier league",
     "super bowl",
-    "finals"
+    "finals",
+    "conference finals"
   ]
 };
 
@@ -166,17 +186,24 @@ export class PolymarketGammaService {
 
     const combinedEntries = [...generalMarkets, ...targetedEntries];
     const deduped = this.dedupEntries(combinedEntries);
-    const { selected, finalByBucket, finalOther } = this.selectWithBucketQuotas(deduped);
+    const {
+      selected,
+      finalByInferredBucket,
+      finalBySourceBucket,
+      finalOther,
+      bucketMismatchCount,
+      bucketMismatches
+    } = this.selectWithBucketQuotas(deduped);
     const limited = selected.map((entry) => entry.market);
     const finalSelectedQuestions = selected
       .map((entry) => formatQuestionSummary(entry))
       .slice(0, 15);
     const finalMacroQuestions = selected
-      .filter((entry) => entry.bucket === "macro")
+      .filter((entry) => entry.inferredBucket === "macro")
       .map((entry) => formatQuestionSummary(entry))
       .slice(0, 10);
     const finalSportsQuestions = selected
-      .filter((entry) => entry.bucket === "sports")
+      .filter((entry) => entry.inferredBucket === "sports")
       .map((entry) => formatQuestionSummary(entry))
       .slice(0, 10);
 
@@ -189,13 +216,16 @@ export class PolymarketGammaService {
         targetedByBucket: targetedStats.byBucket,
         deduped: combinedEntries.length - deduped.length,
         finalSelected: limited.length,
-        finalByBucket,
+        finalByInferredBucket,
+        finalBySourceBucket,
         finalOtherSelected: finalOther,
-        finalMacroSelected: finalByBucket.macro,
-        finalSportsSelected: finalByBucket.sports,
+        finalMacroSelected: finalByInferredBucket.macro,
+        finalSportsSelected: finalByInferredBucket.sports,
         finalSelectedQuestions,
         finalMacroQuestions,
         finalSportsQuestions,
+        bucketMismatchCount,
+        bucketMismatches,
         rejectedNovelty: filterStats.rejectedNovelty,
         skippedMissingResolutionDate: filterStats.skippedMissingResolutionDate,
         skippedLiquidity: filterStats.skippedLiquidity,
@@ -227,7 +257,7 @@ export class PolymarketGammaService {
       const market = this.transformRow(row, stats);
       if (!market) continue;
       const score = this.scoreMarket(market, bucket);
-      entries.push({ market, score, bucket, source });
+      entries.push({ market, score, sourceBucket: bucket, source });
     }
     return entries;
   }
@@ -291,10 +321,10 @@ export class PolymarketGammaService {
     return candidate;
   }
 
-  private scoreMarket(market: ScannedMarket, bucket?: TargetBucket): number {
+  private scoreMarket(market: ScannedMarket, sourceBucket?: TargetBucket): number {
     let score = 0;
-    if (bucket) {
-      score += TARGET_BUCKET_SCORES[bucket] ?? 0;
+    if (sourceBucket) {
+      score += TARGET_BUCKET_SCORES[sourceBucket] ?? 0;
     }
     const haystack = buildMarketText(market);
     for (const rule of CATEGORY_SCORING_RULES) {
@@ -360,14 +390,28 @@ export class PolymarketGammaService {
   }
 
   private selectWithBucketQuotas(entries: ScoredMarket[]): {
-    selected: ScoredMarket[];
-    finalByBucket: Record<TargetBucket, number>;
+    selected: (ScoredMarket & { inferredBucket?: TargetBucket })[];
+    finalByInferredBucket: Record<TargetBucket, number>;
+    finalBySourceBucket: Record<TargetBucket, number>;
     finalOther: number;
+    bucketMismatchCount: number;
+    bucketMismatches: string[];
   } {
-    const enriched = entries.map((entry) => ({
-      ...entry,
-      bucket: inferBucket(entry.market, entry.bucket)
-    }));
+    const bucketMismatches: string[] = [];
+    let bucketMismatchCount = 0;
+    const enriched = entries.map((entry) => {
+      const inferredBucket = inferBucket(entry.market);
+      if (entry.sourceBucket && inferredBucket && entry.sourceBucket !== inferredBucket) {
+        bucketMismatchCount += 1;
+        if (bucketMismatches.length < 15) {
+          bucketMismatches.push(formatBucketMismatch(entry.sourceBucket, inferredBucket, entry.market));
+        }
+      }
+      return {
+        ...entry,
+        inferredBucket
+      };
+    });
     const targetMins: Record<TargetBucket, number> = {
       macro: config.FINAL_BUCKET_MIN_MACRO,
       politics: config.FINAL_BUCKET_MIN_POLITICS,
@@ -376,28 +420,26 @@ export class PolymarketGammaService {
       sports: 0
     };
     const sportsMax = Math.min(config.TARGETED_BUCKET_MAX_SPORTS, config.FINAL_BUCKET_MAX_SPORTS);
-    const selected: ScoredMarket[] = [];
-    const finalByBucket: Record<TargetBucket, number> = {
-      macro: 0,
-      politics: 0,
-      geopolitics: 0,
-      crypto: 0,
-      sports: 0
-    };
+    const selected: (ScoredMarket & { inferredBucket?: TargetBucket })[] = [];
+    const finalByInferredBucket = emptyBucketCounts();
+    const finalBySourceBucket = emptyBucketCounts();
     let finalOther = 0;
     const seen = new Set<string>();
 
-    const tryAdd = (entry: ScoredMarket): boolean => {
+    const tryAdd = (entry: ScoredMarket & { inferredBucket?: TargetBucket }): boolean => {
       const marketId = entry.market.marketId;
       if (!marketId || seen.has(marketId)) return false;
       if (selected.length >= config.MAX_MARKETS_PER_RUN) return false;
-      if (entry.bucket === "sports" && finalByBucket.sports >= sportsMax) return false;
+      if (entry.inferredBucket === "sports" && finalByInferredBucket.sports >= sportsMax) return false;
       selected.push(entry);
       seen.add(marketId);
-      if (entry.bucket) {
-        finalByBucket[entry.bucket] += 1;
+      if (entry.inferredBucket) {
+        finalByInferredBucket[entry.inferredBucket] += 1;
       } else {
         finalOther += 1;
+      }
+      if (entry.sourceBucket) {
+        finalBySourceBucket[entry.sourceBucket] += 1;
       }
       return true;
     };
@@ -405,8 +447,9 @@ export class PolymarketGammaService {
     const reserveBucket = (bucket: TargetBucket, minimum: number) => {
       if (minimum <= 0) return;
       for (const entry of enriched) {
-        if (entry.bucket !== bucket || entry.source !== "targeted") continue;
-        if (tryAdd(entry) && finalByBucket[bucket] >= minimum) {
+        if (entry.inferredBucket !== bucket) continue;
+        if (entry.source !== "targeted") continue;
+        if (tryAdd(entry) && finalByInferredBucket[bucket] >= minimum) {
           break;
         }
       }
@@ -417,7 +460,7 @@ export class PolymarketGammaService {
     reserveBucket("geopolitics", targetMins.geopolitics);
     reserveBucket("crypto", targetMins.crypto);
 
-    const fill = (predicate: (entry: ScoredMarket) => boolean) => {
+    const fill = (predicate: (entry: ScoredMarket & { inferredBucket?: TargetBucket }) => boolean) => {
       for (const entry of enriched) {
         if (selected.length >= config.MAX_MARKETS_PER_RUN) break;
         if (!predicate(entry)) continue;
@@ -425,12 +468,19 @@ export class PolymarketGammaService {
       }
     };
 
-    fill((entry) => entry.bucket !== "sports");
-    if (selected.length < config.MAX_MARKETS_PER_RUN && finalByBucket.sports < sportsMax) {
-      fill((entry) => entry.bucket === "sports");
+    fill((entry) => entry.inferredBucket !== "sports");
+    if (selected.length < config.MAX_MARKETS_PER_RUN && finalByInferredBucket.sports < sportsMax) {
+      fill((entry) => entry.inferredBucket === "sports");
     }
 
-    return { selected, finalByBucket, finalOther };
+    return {
+      selected,
+      finalByInferredBucket,
+      finalBySourceBucket,
+      finalOther,
+      bucketMismatchCount,
+      bucketMismatches
+    };
   }
 }
 
@@ -589,9 +639,8 @@ function buildMarketText(market: ScannedMarket): string {
   return fields.join(" ").toLowerCase();
 }
 
-function inferBucket(market: ScannedMarket, existing?: TargetBucket): TargetBucket | undefined {
-  if (existing) return existing;
-  const haystack = buildMarketText(market);
+function inferBucket(market: ScannedMarket): TargetBucket | undefined {
+  const haystack = buildBucketText(market);
   for (const bucket of ["macro", "politics", "geopolitics", "crypto", "sports"] as TargetBucket[]) {
     if (BUCKET_KEYWORDS[bucket].some((keyword) => haystack.includes(keyword))) {
       return bucket;
@@ -600,10 +649,49 @@ function inferBucket(market: ScannedMarket, existing?: TargetBucket): TargetBuck
   return undefined;
 }
 
-function formatQuestionSummary(entry: ScoredMarket): string {
-  const bucket = entry.bucket ?? "other";
+function formatQuestionSummary(entry: ScoredMarket & { inferredBucket?: TargetBucket }): string {
+  const bucket = entry.inferredBucket ?? "other";
   const marketId = entry.market.marketId;
   const question = entry.market.question?.replace(/\s+/g, " ").trim() ?? "";
   const truncated = question.length > 140 ? `${question.slice(0, 137)}...` : question;
   return `${bucket}:${marketId}:${truncated}`;
+}
+
+function formatBucketMismatch(
+  sourceBucket: TargetBucket,
+  inferredBucket: TargetBucket,
+  market: ScannedMarket
+): string {
+  const question = market.question?.replace(/\s+/g, " ").trim() ?? "";
+  const truncated = question.length > 120 ? `${question.slice(0, 117)}...` : question;
+  return `${sourceBucket}->${inferredBucket}:${market.marketId}:${truncated}`;
+}
+
+function emptyBucketCounts(): Record<TargetBucket, number> {
+  return {
+    macro: 0,
+    politics: 0,
+    geopolitics: 0,
+    crypto: 0,
+    sports: 0
+  };
+}
+
+function buildBucketText(market: ScannedMarket): string {
+  const rawString =
+    typeof market.raw === "string"
+      ? market.raw
+      : market.raw
+        ? (() => {
+            try {
+              return JSON.stringify(market.raw);
+            } catch {
+              return "";
+            }
+          })()
+        : "";
+  return [market.question, market.category ?? "", rawString]
+    .concat(market.description ? [market.description] : [])
+    .join(" ")
+    .toLowerCase();
 }
