@@ -37,6 +37,47 @@ const TARGET_BUCKET_SCORES: Record<TargetBucket, number> = {
   sports: 1
 };
 
+const BUCKET_KEYWORDS: Record<TargetBucket, string[]> = {
+  macro: [
+    "fed",
+    "fomc",
+    "interest rate",
+    "rate cut",
+    "cpi",
+    "inflation",
+    "jobs report",
+    "unemployment",
+    "recession"
+  ],
+  politics: [
+    "senate",
+    "house",
+    "midterm",
+    "election",
+    "primary",
+    "presidential nomination",
+    "nomination",
+    "trump",
+    "biden",
+    "vance",
+    "rubio",
+    "newsom",
+    "paxton",
+    "cornyn"
+  ],
+  geopolitics: ["china", "taiwan", "russia", "ukraine", "israel", "iran", "ceasefire", "nato", "war"],
+  crypto: ["bitcoin", "btc", "ethereum", "eth", "crypto", "etf"],
+  sports: [
+    "nba",
+    "nhl",
+    "stanley cup",
+    "champions league",
+    "premier league",
+    "super bowl",
+    "finals"
+  ]
+};
+
 const CATEGORY_SCORING_RULES: { score: number; keywords: string[] }[] = [
   {
     score: 3,
@@ -92,6 +133,7 @@ const CATEGORY_SCORING_RULES: { score: number; keywords: string[] }[] = [
 const NOVELTY_KEYWORDS = [
   "gta",
   "grand theft auto",
+  "gta vi",
   "celebrity",
   "meme",
   "viral",
@@ -100,7 +142,9 @@ const NOVELTY_KEYWORDS = [
   "oscars",
   "grammys",
   "love island",
-  "reality show"
+  "reality show",
+  "jesus christ",
+  "album before gta vi"
 ];
 
 export class PolymarketGammaService {
@@ -122,8 +166,19 @@ export class PolymarketGammaService {
 
     const combinedEntries = [...generalMarkets, ...targetedEntries];
     const deduped = this.dedupEntries(combinedEntries);
-    const { selected, finalByBucket } = this.selectWithBucketQuotas(deduped);
+    const { selected, finalByBucket, finalOther } = this.selectWithBucketQuotas(deduped);
     const limited = selected.map((entry) => entry.market);
+    const finalSelectedQuestions = selected
+      .map((entry) => formatQuestionSummary(entry))
+      .slice(0, 15);
+    const finalMacroQuestions = selected
+      .filter((entry) => entry.bucket === "macro")
+      .map((entry) => formatQuestionSummary(entry))
+      .slice(0, 10);
+    const finalSportsQuestions = selected
+      .filter((entry) => entry.bucket === "sports")
+      .map((entry) => formatQuestionSummary(entry))
+      .slice(0, 10);
 
     logger.info(
       {
@@ -135,8 +190,12 @@ export class PolymarketGammaService {
         deduped: combinedEntries.length - deduped.length,
         finalSelected: limited.length,
         finalByBucket,
+        finalOtherSelected: finalOther,
         finalMacroSelected: finalByBucket.macro,
         finalSportsSelected: finalByBucket.sports,
+        finalSelectedQuestions,
+        finalMacroQuestions,
+        finalSportsQuestions,
         rejectedNovelty: filterStats.rejectedNovelty,
         skippedMissingResolutionDate: filterStats.skippedMissingResolutionDate,
         skippedLiquidity: filterStats.skippedLiquidity,
@@ -303,15 +362,20 @@ export class PolymarketGammaService {
   private selectWithBucketQuotas(entries: ScoredMarket[]): {
     selected: ScoredMarket[];
     finalByBucket: Record<TargetBucket, number>;
+    finalOther: number;
   } {
+    const enriched = entries.map((entry) => ({
+      ...entry,
+      bucket: inferBucket(entry.market, entry.bucket)
+    }));
     const targetMins: Record<TargetBucket, number> = {
-      macro: config.TARGETED_BUCKET_MIN_MACRO,
-      politics: config.TARGETED_BUCKET_MIN_POLITICS,
-      geopolitics: config.TARGETED_BUCKET_MIN_GEOPOLITICS,
-      crypto: config.TARGETED_BUCKET_MIN_CRYPTO,
+      macro: config.FINAL_BUCKET_MIN_MACRO,
+      politics: config.FINAL_BUCKET_MIN_POLITICS,
+      geopolitics: config.FINAL_BUCKET_MIN_GEOPOLITICS,
+      crypto: config.FINAL_BUCKET_MIN_CRYPTO,
       sports: 0
     };
-    const sportsMax = config.TARGETED_BUCKET_MAX_SPORTS;
+    const sportsMax = Math.min(config.TARGETED_BUCKET_MAX_SPORTS, config.FINAL_BUCKET_MAX_SPORTS);
     const selected: ScoredMarket[] = [];
     const finalByBucket: Record<TargetBucket, number> = {
       macro: 0,
@@ -320,6 +384,7 @@ export class PolymarketGammaService {
       crypto: 0,
       sports: 0
     };
+    let finalOther = 0;
     const seen = new Set<string>();
 
     const tryAdd = (entry: ScoredMarket): boolean => {
@@ -331,13 +396,15 @@ export class PolymarketGammaService {
       seen.add(marketId);
       if (entry.bucket) {
         finalByBucket[entry.bucket] += 1;
+      } else {
+        finalOther += 1;
       }
       return true;
     };
 
     const reserveBucket = (bucket: TargetBucket, minimum: number) => {
       if (minimum <= 0) return;
-      for (const entry of entries) {
+      for (const entry of enriched) {
         if (entry.bucket !== bucket || entry.source !== "targeted") continue;
         if (tryAdd(entry) && finalByBucket[bucket] >= minimum) {
           break;
@@ -351,7 +418,7 @@ export class PolymarketGammaService {
     reserveBucket("crypto", targetMins.crypto);
 
     const fill = (predicate: (entry: ScoredMarket) => boolean) => {
-      for (const entry of entries) {
+      for (const entry of enriched) {
         if (selected.length >= config.MAX_MARKETS_PER_RUN) break;
         if (!predicate(entry)) continue;
         tryAdd(entry);
@@ -363,7 +430,7 @@ export class PolymarketGammaService {
       fill((entry) => entry.bucket === "sports");
     }
 
-    return { selected, finalByBucket };
+    return { selected, finalByBucket, finalOther };
   }
 }
 
@@ -520,4 +587,23 @@ function buildMarketText(market: ScannedMarket): string {
   const fields = [market.question, market.description ?? "", market.category ?? ""];
   if (market.outcomes?.length) fields.push(market.outcomes.join(" "));
   return fields.join(" ").toLowerCase();
+}
+
+function inferBucket(market: ScannedMarket, existing?: TargetBucket): TargetBucket | undefined {
+  if (existing) return existing;
+  const haystack = buildMarketText(market);
+  for (const bucket of ["macro", "politics", "geopolitics", "crypto", "sports"] as TargetBucket[]) {
+    if (BUCKET_KEYWORDS[bucket].some((keyword) => haystack.includes(keyword))) {
+      return bucket;
+    }
+  }
+  return undefined;
+}
+
+function formatQuestionSummary(entry: ScoredMarket): string {
+  const bucket = entry.bucket ?? "other";
+  const marketId = entry.market.marketId;
+  const question = entry.market.question?.replace(/\s+/g, " ").trim() ?? "";
+  const truncated = question.length > 140 ? `${question.slice(0, 137)}...` : question;
+  return `${bucket}:${marketId}:${truncated}`;
 }
