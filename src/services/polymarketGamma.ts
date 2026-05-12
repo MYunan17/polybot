@@ -38,6 +38,142 @@ const TARGET_BUCKET_SCORES: Record<TargetBucket, number> = {
   sports: 1
 };
 
+const NOVELTY_REGEXES: RegExp[] = [
+  /\bgta\s*vi\b/i,
+  /\bgrand\s+theft\s+auto\b/i,
+  /\bjesus\s+christ\b/i,
+  /\balbum\s+before\s+gta\s*vi\b/i,
+  /\bplayboi\s+c(arti)?\b/i,
+  /\brit?anna\s+album\b/i,
+  /\btaylor\s+swift\b/i,
+  /\bkardashian\b/i,
+  /\bcelebrity\b/i,
+  /\bmeme\b/i,
+  /\bviral\b/i,
+  /\blove\s+island\b/i,
+  /\breality\s+show\b/i
+];
+
+const SPORTS_REGEXES: RegExp[] = [
+  /\bnba\b/i,
+  /\bnhl\b/i,
+  /\bstanley\s+cup\b/i,
+  /\bchampions?\s+league\b/i,
+  /\bpremier\s+league\b/i,
+  /\bsuper\s+bowl\b/i,
+  /\bconference\s+finals?\b/i,
+  /\bnba\s+finals?\b/i,
+  /\bnhl\s+finals?\b/i
+];
+
+const CRYPTO_REGEXES: RegExp[] = [
+  /\bbitcoin\b/i,
+  /\bbtc\b/i,
+  /\bethereum\b/i,
+  /\beth\b/i,
+  /\bcrypto\b/i,
+  /\betf\b/i
+];
+
+const MACRO_REGEXES: RegExp[] = [
+  /\bfed(?:eral\s+reserve)?\b/i,
+  /\bfomc\b/i,
+  /\binterest\s+rates?\b/i,
+  /\brate\s+cuts?\b/i,
+  /\brate\s+hikes?\b/i,
+  /\bcpi\b/i,
+  /\binflation\b/i,
+  /\bunemployment\b/i,
+  /\brecession\b/i,
+  /\bjobs?\s+report\b/i,
+  /\btreasury\s+yields?\b/i
+];
+
+const GEOPOLITICS_REGEXES: RegExp[] = [
+  /\bchina\b/i,
+  /\btaiwan\b/i,
+  /\brussia\b/i,
+  /\bukraine\b/i,
+  /\bisrael\b/i,
+  /\biran\b/i,
+  /\bceasefire\b/i,
+  /\bnato\b/i,
+  /\bwar\b/i,
+  /\binvasion\b/i
+];
+
+const POLITICS_REGEXES: RegExp[] = [
+  /\bsenate\b/i,
+  /\bhouse\b/i,
+  /\bmidterms?\b/i,
+  /\belections?\b/i,
+  /\bprimary\b/i,
+  /\bpresidential\s+nomination\b/i,
+  /\bpresident\b/i,
+  /\brepublican\b/i,
+  /\bdemocrat(ic)?\b/i,
+  /\bgop\b/i,
+  /\btrump\b/i,
+  /\bbiden\b/i,
+  /\bvance\b/i,
+  /\brubio\b/i,
+  /\bnewsom\b/i,
+  /\bpaxton\b/i,
+  /\bcornyn\b/i
+];
+
+const CATEGORY_SCORING_RULES: { score: number; keywords: string[] }[] = [
+  {
+    score: 3,
+    keywords: [
+      "fed",
+      "fomc",
+      "interest rate",
+      "rate cut",
+      "cpi",
+      "inflation",
+      "jobs report",
+      "unemployment",
+      "recession"
+    ]
+  },
+  {
+    score: 3,
+    keywords: [
+      "election",
+      "primary",
+      "senate",
+      "house",
+      "governor",
+      "midterm",
+      "nomination",
+      "trump",
+      "biden"
+    ]
+  },
+  {
+    score: 3,
+    keywords: ["nato", "taiwan", "ukraine", "israel", "iran", "ceasefire", "war", "conflict"]
+  },
+  {
+    score: 2,
+    keywords: ["bitcoin", "btc", "ethereum", "eth", "crypto", "etf", "stablecoin"]
+  },
+  {
+    score: 1,
+    keywords: [
+      "nba",
+      "nhl",
+      "nfl",
+      "mlb",
+      "champions league",
+      "stanley cup",
+      "super bowl",
+      "playoffs"
+    ]
+  }
+];
+
 const BUCKET_KEYWORDS: Record<TargetBucket, string[]> = {
   macro: [
     "fed",
@@ -98,58 +234,6 @@ const BUCKET_KEYWORDS: Record<TargetBucket, string[]> = {
   ]
 };
 
-const CATEGORY_SCORING_RULES: { score: number; keywords: string[] }[] = [
-  {
-    score: 3,
-    keywords: [
-      "fed",
-      "fomc",
-      "interest rate",
-      "rate cut",
-      "cpi",
-      "inflation",
-      "jobs report",
-      "unemployment",
-      "recession"
-    ]
-  },
-  {
-    score: 3,
-    keywords: [
-      "election",
-      "primary",
-      "senate",
-      "house",
-      "governor",
-      "midterm",
-      "nomination",
-      "trump",
-      "biden"
-    ]
-  },
-  {
-    score: 3,
-    keywords: ["nato", "taiwan", "ukraine", "israel", "iran", "ceasefire", "war", "conflict"]
-  },
-  {
-    score: 2,
-    keywords: ["bitcoin", "btc", "ethereum", "eth", "crypto", "etf", "stablecoin"]
-  },
-  {
-    score: 1,
-    keywords: [
-      "nba",
-      "nhl",
-      "nfl",
-      "mlb",
-      "champions league",
-      "stanley cup",
-      "super bowl",
-      "playoffs"
-    ]
-  }
-];
-
 const NOVELTY_KEYWORDS = [
   "gta",
   "grand theft auto",
@@ -164,7 +248,9 @@ const NOVELTY_KEYWORDS = [
   "love island",
   "reality show",
   "jesus christ",
-  "album before gta vi"
+  "album before gta vi",
+  "playboi carti",
+  "rihanna album"
 ];
 
 export class PolymarketGammaService {
@@ -630,7 +716,7 @@ function parseQueryList(value?: string): string[] {
 
 function looksLikeNovelty(market: ScannedMarket): boolean {
   const haystack = buildMarketText(market);
-  return NOVELTY_KEYWORDS.some((keyword) => haystack.includes(keyword));
+  return matchesAnyRegex(haystack, NOVELTY_REGEXES);
 }
 
 function buildMarketText(market: ScannedMarket): string {
@@ -640,12 +726,14 @@ function buildMarketText(market: ScannedMarket): string {
 }
 
 function inferBucket(market: ScannedMarket): TargetBucket | undefined {
-  const haystack = buildBucketText(market);
-  for (const bucket of ["macro", "politics", "geopolitics", "crypto", "sports"] as TargetBucket[]) {
-    if (BUCKET_KEYWORDS[bucket].some((keyword) => haystack.includes(keyword))) {
-      return bucket;
-    }
-  }
+  const text = cleanBucketText(market);
+  if (!text.length) return undefined;
+  if (matchesAnyRegex(text, NOVELTY_REGEXES)) return undefined;
+  if (matchesSports(text)) return "sports";
+  if (matchesAnyRegex(text, CRYPTO_REGEXES)) return "crypto";
+  if (matchesAnyRegex(text, MACRO_REGEXES)) return "macro";
+  if (matchesAnyRegex(text, GEOPOLITICS_REGEXES)) return "geopolitics";
+  if (matchesAnyRegex(text, POLITICS_REGEXES)) return "politics";
   return undefined;
 }
 
@@ -654,7 +742,9 @@ function formatQuestionSummary(entry: ScoredMarket & { inferredBucket?: TargetBu
   const marketId = entry.market.marketId;
   const question = entry.market.question?.replace(/\s+/g, " ").trim() ?? "";
   const truncated = question.length > 140 ? `${question.slice(0, 137)}...` : question;
-  return `${bucket}:${marketId}:${truncated}`;
+  const cleanSnippet = cleanBucketText(entry.market).slice(0, 80);
+  const textPreview = cleanSnippet.length ? `|text:${cleanSnippet}` : "";
+  return `${bucket}:${marketId}:${truncated}${textPreview}`;
 }
 
 function formatBucketMismatch(
@@ -664,7 +754,9 @@ function formatBucketMismatch(
 ): string {
   const question = market.question?.replace(/\s+/g, " ").trim() ?? "";
   const truncated = question.length > 120 ? `${question.slice(0, 117)}...` : question;
-  return `${sourceBucket}->${inferredBucket}:${market.marketId}:${truncated}`;
+  const cleanSnippet = cleanBucketText(market).slice(0, 80);
+  const textPreview = cleanSnippet.length ? `|text:${cleanSnippet}` : "";
+  return `${sourceBucket}->${inferredBucket}:${market.marketId}:${truncated}${textPreview}`;
 }
 
 function emptyBucketCounts(): Record<TargetBucket, number> {
@@ -677,21 +769,35 @@ function emptyBucketCounts(): Record<TargetBucket, number> {
   };
 }
 
-function buildBucketText(market: ScannedMarket): string {
-  const rawString =
-    typeof market.raw === "string"
-      ? market.raw
-      : market.raw
-        ? (() => {
-            try {
-              return JSON.stringify(market.raw);
-            } catch {
-              return "";
-            }
-          })()
-        : "";
-  return [market.question, market.category ?? "", rawString]
-    .concat(market.description ? [market.description] : [])
-    .join(" ")
-    .toLowerCase();
+function cleanBucketText(market: ScannedMarket): string {
+  const parts: string[] = [];
+  const push = (value: unknown) => {
+    if (typeof value === "string") {
+      const trimmed = value.trim();
+      if (trimmed.length) parts.push(trimmed);
+    }
+  };
+  push(market.question);
+  push(market.category);
+  const raw = market.raw;
+  if (raw && typeof raw === "object") {
+    push((raw as any).groupItemTitle);
+    const events = (raw as any).events;
+    if (Array.isArray(events) && events.length && events[0] && typeof events[0] === "object") {
+      push((events[0] as any).title);
+    }
+  }
+  return parts
+    .map((part) => part.toLowerCase())
+    .join(" ");
+}
+
+function matchesAnyRegex(text: string, patterns: RegExp[]): boolean {
+  return patterns.some((regex) => regex.test(text));
+}
+
+function matchesSports(text: string): boolean {
+  if (matchesAnyRegex(text, SPORTS_REGEXES)) return true;
+  if (/\bfinals?\b/i.test(text) && /\b(nba|nhl|conference)\b/i.test(text)) return true;
+  return false;
 }
