@@ -190,14 +190,13 @@ export class SqliteStore {
     );
   }
 
-  async insertOpenClawExecutionPlan(input: OpenClawPlanInsert): Promise<void> {
+  async insertOpenClawExecutionPlan(input: OpenClawPlanInsert): Promise<number> {
     const db = await getDb();
-    await db.run(
+    const result = await db.run(
       `
         INSERT INTO openclaw_execution_plans
           (run_id, market_id, action, side, token_id, size_usd, limit_price, max_slippage, dry_run, approval_status, reason, risk_checks, plan_json, created_at)
-        VALUES
-          (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
       `,
       input.runId,
       input.marketId,
@@ -214,6 +213,7 @@ export class SqliteStore {
       JSON.stringify(input.planJson),
       nowIso()
     );
+    return Number(result.lastID);
   }
 
   async listOpenClawPlans(filter?: { approvalStatus?: string; dryRun?: boolean; unexecuted?: boolean }): Promise<OpenClawPlanRow[]> {

@@ -25,6 +25,7 @@
     "openclaw:plans": "tsx src/scripts/openclawPlans.ts",
     "openclaw:approve": "tsx src/scripts/openclawApprove.ts",
     "openclaw:execute-approved": "tsx src/scripts/openclawExecuteApproved.ts",
+    "openclaw:stage-live-plan": "tsx src/scripts/openclawStageLivePlan.ts",
     "lint": "tsc -p tsconfig.json --noEmit",
     "typecheck": "tsc -p tsconfig.json --noEmit"
   },
