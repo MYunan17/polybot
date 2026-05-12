@@ -30,8 +30,13 @@ export class OpenClawExecutionAdapter {
     const dryRun = this.cfg.OPENCLAW_DRY_RUN;
     const approvalStatus = this.cfg.OPENCLAW_REQUIRE_MANUAL_APPROVAL ? "pending_manual_approval" : "dry_run_only";
     const tokenId = this.resolveTokenId(context.side, (context.snapshot as MarketLike | undefined) ?? context.market);
+    const enrichedMarket = (context.snapshot as MarketLike | undefined) ?? context.market;
+    const planQuestion = context.market.question ?? enrichedMarket?.question;
+    const planResolution = context.market.resolutionDate ?? enrichedMarket?.resolutionDate;
     const plan = {
       market_id: context.market.marketId,
+      question: planQuestion,
+      resolution_date: planResolution,
       token_id: tokenId,
       side: context.side,
       action: context.action,
@@ -40,7 +45,8 @@ export class OpenClawExecutionAdapter {
       max_slippage: maxSlippage,
       dry_run: dryRun,
       reason: context.note ?? context.judgment.reason,
-      risk_checks: this.buildRiskChecks()
+      risk_checks: this.buildRiskChecks(),
+      metadata: this.buildMetadata(context, planResolution)
     };
     await this.store.insertOpenClawExecutionPlan({
       runId: context.runId,
@@ -74,5 +80,15 @@ export class OpenClawExecutionAdapter {
     }
     checks.push(`max_order_usd<=${this.cfg.OPENCLAW_MAX_ORDER_USD}`);
     return checks;
+  }
+
+  private buildMetadata(context: PlanContext, resolutionDate?: string | null) {
+    return {
+      rawProbability: context.judgment.marketProbability,
+      adjustedProbability: context.judgment.adjustedProbability,
+      edge: context.judgment.edge,
+      spread: context.judgment.spread,
+      resolutionDate: resolutionDate ?? context.market.resolutionDate ?? ""
+    };
   }
 }

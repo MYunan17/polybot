@@ -88,6 +88,39 @@ export interface OpenClawPlanInsert {
   planJson: Record<string, unknown>;
 }
 
+export interface OpenClawPlanRow {
+  id: number;
+  runId: string;
+  marketId: string;
+  action: "BUY" | "SELL" | "CLOSE" | "SKIP";
+  side: "YES" | "NO" | "BOTH";
+  tokenId?: string;
+  sizeUsd: number;
+  limitPrice: number;
+  maxSlippage?: number | null;
+  dryRun: boolean;
+  approvalStatus: string;
+  reason?: string | null;
+  riskChecks: string[];
+  planJson: Record<string, unknown>;
+  createdAt: string;
+}
+
+export interface OpenClawExecutionInsert {
+  planId: number;
+  runId: string;
+  marketId: string;
+  action: string;
+  side: string;
+  tokenId?: string;
+  sizeUsd: number;
+  limitPrice: number;
+  status: string;
+  txOrOrderId?: string;
+  errorMessage?: string;
+  dryRun: boolean;
+}
+
 function mapPaperTradeRow(row: PaperTradeDbRow): PaperTradeRecord {
   return {
     id: row.id,
@@ -106,6 +139,26 @@ function mapPaperTradeRow(row: PaperTradeDbRow): PaperTradeRecord {
     pnlUsd: row.pnl_usd != null ? Number(row.pnl_usd) : null,
     closedAt: row.closed_at,
     runIdRef: row.run_id
+  };
+}
+
+function mapOpenClawPlanRow(row: any): OpenClawPlanRow {
+  return {
+    id: row.id,
+    runId: row.run_id,
+    marketId: row.market_id,
+    action: row.action,
+    side: row.side,
+    tokenId: row.token_id ?? undefined,
+    sizeUsd: Number(row.size_usd ?? 0),
+    limitPrice: Number(row.limit_price ?? 0),
+    maxSlippage: row.max_slippage != null ? Number(row.max_slippage) : null,
+    dryRun: Boolean(row.dry_run),
+    approvalStatus: row.approval_status,
+    reason: row.reason,
+    riskChecks: (parseJson(row.risk_checks) ?? []) as string[],
+    planJson: (parseJson(row.plan_json) ?? {}) as Record<string, unknown>,
+    createdAt: row.created_at
   };
 }
 
@@ -161,6 +214,95 @@ export class SqliteStore {
       JSON.stringify(input.planJson),
       nowIso()
     );
+  }
+
+  async listOpenClawPlans(filter?: { approvalStatus?: string; dryRun?: boolean; unexecuted?: boolean }): Promise<OpenClawPlanRow[]> {
+    const db = await getDb();
+    const clauses: string[] = [];
+    const params: unknown[] = [];
+    if (filter?.approvalStatus) {
+      clauses.push("approval_status = ?");
+      params.push(filter.approvalStatus);
+    }
+    if (filter?.dryRun !== undefined) {
+      clauses.push("dry_run = ?");
+      params.push(filter.dryRun ? 1 : 0);
+    }
+    if (filter?.unexecuted) {
+      clauses.push(
+        "NOT EXISTS (SELECT 1 FROM openclaw_executions e WHERE e.plan_id = openclaw_execution_plans.id)"
+      );
+    }
+    const where = clauses.length ? `WHERE ${clauses.join(" AND ")}` : "";
+    const rows = await db.all<Array<any>>(
+      `SELECT id, run_id, market_id, action, side, token_id, size_usd, limit_price, max_slippage, dry_run, approval_status, reason, risk_checks, plan_json, created_at
+       FROM openclaw_execution_plans
+       ${where}
+       ORDER BY id DESC`,
+      ...params
+    );
+    return rows.map(mapOpenClawPlanRow);
+  }
+
+  async getOpenClawPlanById(planId: number): Promise<OpenClawPlanRow | null> {
+    const db = await getDb();
+    const row = await db.get<any>(
+      `SELECT id, run_id, market_id, action, side, token_id, size_usd, limit_price, max_slippage, dry_run, approval_status, reason, risk_checks, plan_json, created_at
+       FROM openclaw_execution_plans
+       WHERE id = ?`,
+      planId
+    );
+    return row ? mapOpenClawPlanRow(row) : null;
+  }
+
+  async updateOpenClawPlanApproval(planId: number, approvalStatus: string): Promise<void> {
+    const db = await getDb();
+    await db.run(`UPDATE openclaw_execution_plans SET approval_status = ? WHERE id = ?`, approvalStatus, planId);
+  }
+
+  async insertOpenClawExecution(input: OpenClawExecutionInsert): Promise<void> {
+    const db = await getDb();
+    await db.run(
+      `INSERT INTO openclaw_executions (plan_id, run_id, market_id, action, side, token_id, size_usd, limit_price, status, tx_or_order_id, error_message, dry_run, created_at)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+      input.planId,
+      input.runId,
+      input.marketId,
+      input.action,
+      input.side,
+      input.tokenId ?? null,
+      input.sizeUsd,
+      input.limitPrice,
+      input.status,
+      input.txOrOrderId ?? null,
+      input.errorMessage ?? null,
+      input.dryRun ? 1 : 0,
+      nowIso()
+    );
+  }
+
+  async getOpenClawDailyUsage(): Promise<{ orderCount: number; usdTotal: number }> {
+    const db = await getDb();
+    const row = await db.get<{ count: number; total: number }>(
+      `SELECT COUNT(*) as count, COALESCE(SUM(size_usd), 0) as total
+       FROM openclaw_executions
+       WHERE date(created_at) = date('now', 'localtime')
+         AND status IN ('submitted', 'failed', 'rejected')`
+    );
+    return { orderCount: row?.count ?? 0, usdTotal: row?.total ?? 0 };
+  }
+
+  async getOpenClawExecutionSummary(runId?: string): Promise<Record<string, number>> {
+    if (!runId) return {};
+    const db = await getDb();
+    const rows = await db.all<Array<{ status: string; count: number }>>(
+      `SELECT status, COUNT(*) as count FROM openclaw_executions WHERE run_id = ? GROUP BY status`,
+      runId
+    );
+    return rows.reduce<Record<string, number>>((acc, row) => {
+      acc[row.status] = row.count;
+      return acc;
+    }, {});
   }
 
   async countOpenClawPlans(runId?: string): Promise<number> {

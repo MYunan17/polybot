@@ -104,6 +104,7 @@ void (async () => {
   const counts = await fetchCounts();
   const portfolio = await store.getPaperPortfolioSummary();
   const openClawPlans = await store.countOpenClawPlans(phase4Summary?.runId);
+  const openClawExecutions = await store.getOpenClawExecutionSummary(phase4Summary?.runId);
 
   const summary = {
     seed: "ok",
@@ -111,7 +112,7 @@ void (async () => {
     paper: phase4Summary,
     counts,
     portfolio,
-    openClaw: { enabled: config.ENABLE_OPENCLAW, plans: openClawPlans },
+    openClaw: { enabled: config.ENABLE_OPENCLAW, plans: openClawPlans, executions: openClawExecutions },
     backup: backupPath ?? undefined
   };
 
@@ -120,7 +121,8 @@ void (async () => {
   const portfolioLine = formatPortfolioLine(portfolio);
   const latestOpenLine = `Latest open positions: ${formatOpenPositions(portfolio.latestOpen)}`;
   const latestClosedLine = `Latest closed trades: ${formatClosedTrades(portfolio.latestClosed)}`;
-  const openClawLine = formatOpenClawLine(openClawPlans);
+  const openClawPlanLine = formatOpenClawPlanLine(openClawPlans);
+  const openClawLiveLine = formatOpenClawLiveLine(openClawExecutions);
 
   const summaryLines = [
     "Phase 5 Production Dry Run",
@@ -131,7 +133,8 @@ void (async () => {
     phase4Summary
       ? `Paper: simulated ${phase4Summary.simulated}/${phase4Summary.considered}, skipped ${phase4Summary.skipped} (dupes ${phase4Summary.duplicateOpenSkipped}, flips closed ${phase4Summary.closedOnSignalFlip})`
       : "Paper: (not run)",
-    openClawLine,
+    openClawPlanLine,
+    openClawLiveLine,
     portfolioLine,
     latestOpenLine,
     latestClosedLine,
@@ -178,9 +181,18 @@ function formatClosedTrades(trades: PaperTradeRecord[]): string {
     .join(" | ");
 }
 
-function formatOpenClawLine(plans: number): string {
+function formatOpenClawPlanLine(plans: number): string {
   if (!config.ENABLE_OPENCLAW) return "OpenClaw: disabled";
-  return `OpenClaw: dry-run plans ${plans}, live orders 0`;
+  return `OpenClaw: dry-run plans ${plans}`;
+}
+
+function formatOpenClawLiveLine(summary: Record<string, number>): string {
+  if (!config.ENABLE_OPENCLAW) return "OpenClaw live: disabled";
+  const submitted = summary.submitted ?? 0;
+  const rejected = summary.rejected ?? 0;
+  const failed = summary.failed ?? 0;
+  const skipped = (summary.skipped_kill_switch ?? 0) + (summary.skipped_daily_cap ?? 0);
+  return `OpenClaw live: submitted ${submitted}, rejected ${rejected}, failed ${failed}, skipped ${skipped}`;
 }
 
 async function restartMirofishIfNeeded(): Promise<void> {

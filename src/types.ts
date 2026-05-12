@@ -163,7 +163,7 @@ export interface RiskDecision {
 }
 
 export interface ExecutionResult {
-  status: "dry_run" | "submitted" | "failed" | "rejected";
+  status: "dry_run" | "submitted" | "failed" | "rejected" | "skipped_kill_switch" | "skipped_daily_cap";
   orderId?: string;
   txHash?: string;
   message: string;

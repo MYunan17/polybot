@@ -22,6 +22,9 @@
     "full-dry-cycle": "tsx src/scripts/fullDryCycle.ts",
     "production-dry-run": "tsx src/scripts/productionDryRun.ts",
     "openclaw-health": "tsx src/scripts/openclawHealth.ts",
+    "openclaw:plans": "tsx src/scripts/openclawPlans.ts",
+    "openclaw:approve": "tsx src/scripts/openclawApprove.ts",
+    "openclaw:execute-approved": "tsx src/scripts/openclawExecuteApproved.ts",
     "lint": "tsc -p tsconfig.json --noEmit",
     "typecheck": "tsc -p tsconfig.json --noEmit"
   },
