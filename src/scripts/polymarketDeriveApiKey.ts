@@ -138,6 +138,16 @@ void (async () => {
     funderAddress: funder
   });
   const creds = await client.createOrDeriveApiKey();
+  let ownerHint: string | undefined;
+  try {
+    const response = await client.getApiKeys();
+    const selfEntry = Array.isArray((response as any)?.apiKeys)
+      ? (response as any).apiKeys.find((entry: any) => entry?.apiKey === creds.key)
+      : undefined;
+    ownerHint = selfEntry?.owner ?? selfEntry?.owner_address ?? selfEntry?.user ?? selfEntry?.address;
+  } catch (err: any) {
+    logger.warn({ message: err?.message }, "Unable to fetch API key owner after derivation");
+  }
 
   const output = {
     OPENCLAW_API_KEY: creds.key,
@@ -151,6 +161,18 @@ void (async () => {
   Object.entries(output).forEach(([key, value]) => {
     console.log(`${key}=${value}`);
   });
+  if (ownerHint) {
+    console.log(`derived_api_key_owner=${ownerHint}`);
+  }
+  if (signatureType === SignatureTypeV2.POLY_1271 && ownerHint && funder && ownerHint.toLowerCase() !== funder.toLowerCase()) {
+    console.log(
+      "warning: SDK-derived API key appears to be owned by the signer EOA, not the deposit wallet; you may need to request a deposit-wallet-bound API key via the Polymarket UI or relayer support"
+    );
+  } else if (signatureType === SignatureTypeV2.POLY_1271 && !ownerHint) {
+    console.log(
+      "warning: unable to confirm API key ownership; deposit wallet orders require the API key to be owned by the deposit wallet"
+    );
+  }
 
   if (options.writeEnv) {
     await upsertEnvFile(output);

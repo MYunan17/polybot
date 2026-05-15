@@ -25,6 +25,7 @@ import { privateKeyToAccount } from "viem/accounts";
 import { config } from "../config";
 import { ExecutionRequest, ExecutionResult } from "../types";
 import { logger } from "../logger";
+import { extractApiKeyOwnership, type ApiKeyOwnershipDetails } from "./apiKeyOwnership";
 
 const POST_ORDER_PATH = "/order";
 
@@ -33,6 +34,10 @@ export class OpenClawClient {
   private clobSigner?: ReturnType<typeof createWalletClient>;
   private clobCreds?: ApiKeyCreds;
   private clobHost?: string;
+  private signerAddress?: `0x${string}`;
+  private signatureType?: SignatureTypeV2;
+  private funderAddress?: `0x${string}`;
+  private apiKeyOwnership?: ApiKeyOwnershipDetails;
 
   async healthCheck(): Promise<boolean> {
     try {
@@ -46,6 +51,57 @@ export class OpenClawClient {
     }
   }
 
+  private async assertApiKeyOwnershipMatches(): Promise<void> {
+    await this.ensureClobClient();
+    if (this.signatureType !== SignatureTypeV2.POLY_1271) {
+      return;
+    }
+    const funder = this.funderAddress;
+    if (!funder) {
+      return;
+    }
+    const ownership = await this.ensureApiKeyOwnershipDetails();
+    if (!ownership?.owner) {
+      logger.warn("Unable to determine API key owner; skipping ownership validation");
+      return;
+    }
+    if (ownership.owner.toLowerCase() !== funder.toLowerCase()) {
+      const fieldsPreview = this.ownershipFieldsPreview(ownership.fields);
+      throw new Error(
+        `OPENCLAW_API_KEY owner ${ownership.owner} does not match POLYMARKET_FUNDER_ADDRESS ${funder}. Fields=${fieldsPreview}`
+      );
+    }
+  }
+
+  private ownershipFieldsPreview(fields: Record<string, string>): string {
+    const entries = Object.entries(fields)
+      .slice(0, 6)
+      .map(([key, value]) => `${key}=${value}`);
+    return entries.join(", ") || "n/a";
+  }
+
+  private async ensureApiKeyOwnershipDetails(forceRefresh = false): Promise<ApiKeyOwnershipDetails | undefined> {
+    if (!forceRefresh && this.apiKeyOwnership) {
+      return this.apiKeyOwnership;
+    }
+    const details = await this.fetchApiKeyOwnershipDetails();
+    if (details) {
+      this.apiKeyOwnership = details;
+    }
+    return details;
+  }
+
+  private async fetchApiKeyOwnershipDetails(): Promise<ApiKeyOwnershipDetails | undefined> {
+    try {
+      const client = await this.ensureClobClient();
+      const response = await client.getApiKeys();
+      return extractApiKeyOwnership(response, this.clobCreds?.key);
+    } catch (err: any) {
+      logger.warn({ message: err?.message }, "Failed to fetch API key ownership details");
+      return undefined;
+    }
+  }
+
   async getCapabilities(): Promise<unknown> {
     // TODO: adjust if endpoint differs.
     const res = await axios.get(`${config.OPENCLAW_URL}/capabilities`, { headers: this.headers(), timeout: 6000 });
@@ -54,6 +110,7 @@ export class OpenClawClient {
 
   async placeLimitOrder(request: ExecutionRequest): Promise<ExecutionResult> {
     try {
+      await this.assertApiKeyOwnershipMatches();
       const { payload, payloadJson, payloadHash } = await this.buildVersionedPostPayload(request);
       const response = await this.submitVersionedPayload(payload, payloadJson);
       const orderId = this.extractOrderId(response);
@@ -190,6 +247,22 @@ export class OpenClawClient {
     return { before, after };
   }
 
+  async getApiKeyOwnershipDiagnostics(forceRefresh = false): Promise<{
+    signerAddress?: `0x${string}`;
+    funderAddress?: `0x${string}`;
+    signatureType?: SignatureTypeV2;
+    ownership?: ApiKeyOwnershipDetails;
+  }> {
+    await this.ensureClobClient();
+    const ownership = await this.ensureApiKeyOwnershipDetails(forceRefresh);
+    return {
+      signerAddress: this.signerAddress,
+      funderAddress: this.funderAddress,
+      signatureType: this.signatureType,
+      ownership
+    };
+  }
+
   private headers(): Record<string, string> {
     return config.OPENCLAW_API_KEY ? { "x-api-key": config.OPENCLAW_API_KEY } : {};
   }
@@ -215,6 +288,10 @@ export class OpenClawClient {
     this.clobSigner = wallet;
     this.clobCreds = creds;
     this.clobHost = host;
+    this.signerAddress = account.address;
+    this.signatureType = signatureType;
+    this.funderAddress = funder;
+    this.apiKeyOwnership = undefined;
     return this.clob;
   }
 

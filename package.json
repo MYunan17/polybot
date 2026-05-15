@@ -39,6 +39,7 @@
     "polymarket:whoami": "tsx src/scripts/polymarketWhoami.ts",
     "polymarket:discover-wallet": "tsx src/scripts/polymarketDiscoverWallet.ts",
     "polymarket:sync-balance": "tsx src/scripts/polymarketSyncBalance.ts",
+    "polymarket:api-key-owner": "tsx src/scripts/polymarketApiKeyOwner.ts",
     "lint": "tsc -p tsconfig.json --noEmit",
     "typecheck": "tsc -p tsconfig.json --noEmit"
   },
