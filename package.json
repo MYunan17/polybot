@@ -35,11 +35,13 @@
     "openclaw:signed-order-preview": "tsx src/scripts/openclawSignedOrderPreview.ts",
     "openclaw:post-payload-preview": "tsx src/scripts/openclawPostPayloadPreview.ts",
     "openclaw:submit-dry-payload": "tsx src/scripts/openclawSubmitDryPayload.ts",
+    "openclaw:relayer-payload-preview": "tsx src/scripts/openclawRelayerPayloadPreview.ts",
     "polymarket:derive-api-key": "tsx src/scripts/polymarketDeriveApiKey.ts",
     "polymarket:whoami": "tsx src/scripts/polymarketWhoami.ts",
     "polymarket:discover-wallet": "tsx src/scripts/polymarketDiscoverWallet.ts",
     "polymarket:sync-balance": "tsx src/scripts/polymarketSyncBalance.ts",
     "polymarket:api-key-owner": "tsx src/scripts/polymarketApiKeyOwner.ts",
+    "polymarket:relayer-whoami": "tsx src/scripts/polymarketRelayerWhoami.ts",
     "lint": "tsc -p tsconfig.json --noEmit",
     "typecheck": "tsc -p tsconfig.json --noEmit"
   },

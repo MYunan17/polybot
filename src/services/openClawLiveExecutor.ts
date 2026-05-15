@@ -27,6 +27,14 @@ export function getMissingOpenClawCredentials(cfg: AppConfig): string[] {
   if (!cfg.POLYMARKET_PRIVATE_KEY?.trim()) {
     missing.push("POLYMARKET_PRIVATE_KEY");
   }
+  if ((cfg.OPENCLAW_SUBMIT_PATH ?? "clob_direct") === "builder_relayer") {
+    if (!cfg.POLYMARKET_RELAYER_API_KEY?.trim()) {
+      missing.push("POLYMARKET_RELAYER_API_KEY");
+    }
+    if (!cfg.POLYMARKET_RELAYER_API_KEY_ADDRESS?.trim()) {
+      missing.push("POLYMARKET_RELAYER_API_KEY_ADDRESS");
+    }
+  }
   return missing;
 }
 
@@ -43,6 +51,18 @@ export class OpenClawLiveExecutor {
     }
     if (this.cfg.OPENCLAW_DRY_RUN) {
       throw new Error("OPENCLAW_DRY_RUN=true; refuse to execute live orders");
+    }
+
+    const builderRelayerMode = (this.cfg.OPENCLAW_SUBMIT_PATH ?? "clob_direct") === "builder_relayer";
+    if (builderRelayerMode && this.cfg.POLYMARKET_SIGNATURE_TYPE !== 3) {
+      throw new Error("OPENCLAW_SUBMIT_PATH=builder_relayer requires POLYMARKET_SIGNATURE_TYPE=3 (POLY_1271)");
+    }
+    if (builderRelayerMode) {
+      const funder = this.cfg.POLYMARKET_FUNDER_ADDRESS?.trim();
+      const relayerAddress = this.cfg.POLYMARKET_RELAYER_API_KEY_ADDRESS?.trim();
+      if (funder && relayerAddress && funder.toLowerCase() !== relayerAddress.toLowerCase()) {
+        throw new Error("POLYMARKET_RELAYER_API_KEY_ADDRESS must match POLYMARKET_FUNDER_ADDRESS for builder relayer submissions");
+      }
     }
 
     const plans = await this.store.listOpenClawPlans({ approvalStatus: "approved", dryRun: false, unexecuted: true });

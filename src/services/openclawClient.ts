@@ -110,6 +110,14 @@ export class OpenClawClient {
 
   async placeLimitOrder(request: ExecutionRequest): Promise<ExecutionResult> {
     try {
+      const submitPath = (config.OPENCLAW_SUBMIT_PATH ?? "clob_direct") as "clob_direct" | "builder_relayer";
+      if (submitPath === "builder_relayer") {
+        this.ensureBuilderRelayerConfig();
+        throw new Error(
+          "OPENCLAW_SUBMIT_PATH=builder_relayer is not implemented yet; waiting for Polymarket relayer order endpoint confirmation"
+        );
+      }
+
       await this.assertApiKeyOwnershipMatches();
       const { payload, payloadJson, payloadHash } = await this.buildVersionedPostPayload(request);
       const response = await this.submitVersionedPayload(payload, payloadJson);
@@ -420,6 +428,35 @@ export class OpenClawClient {
       return getAddress(trimmed);
     } catch {
       throw new Error(`Invalid POLYMARKET_FUNDER_ADDRESS=${trimmed}`);
+    }
+  }
+
+  private ensureBuilderRelayerConfig(): void {
+    const relayerKey = config.POLYMARKET_RELAYER_API_KEY?.trim();
+    const relayerAddressRaw = config.POLYMARKET_RELAYER_API_KEY_ADDRESS?.trim();
+    if (!relayerKey) {
+      throw new Error("OPENCLAW_SUBMIT_PATH=builder_relayer requires POLYMARKET_RELAYER_API_KEY");
+    }
+    if (!relayerAddressRaw) {
+      throw new Error("OPENCLAW_SUBMIT_PATH=builder_relayer requires POLYMARKET_RELAYER_API_KEY_ADDRESS");
+    }
+    let relayerAddress: `0x${string}`;
+    try {
+      relayerAddress = getAddress(relayerAddressRaw);
+    } catch {
+      throw new Error(`POLYMARKET_RELAYER_API_KEY_ADDRESS is not a valid address: ${relayerAddressRaw}`);
+    }
+    const funder = this.normalizeAddress(config.POLYMARKET_FUNDER_ADDRESS);
+    if (!funder) {
+      throw new Error("OPENCLAW_SUBMIT_PATH=builder_relayer requires POLYMARKET_FUNDER_ADDRESS to be configured");
+    }
+    if (funder.toLowerCase() !== relayerAddress.toLowerCase()) {
+      throw new Error(
+        `POLYMARKET_RELAYER_API_KEY_ADDRESS (${relayerAddress}) must match POLYMARKET_FUNDER_ADDRESS (${funder}) for builder relayer submissions`
+      );
+    }
+    if (config.POLYMARKET_SIGNATURE_TYPE !== SignatureTypeV2.POLY_1271) {
+      throw new Error("OPENCLAW_SUBMIT_PATH=builder_relayer requires POLYMARKET_SIGNATURE_TYPE=3 (POLY_1271)");
     }
   }
 
