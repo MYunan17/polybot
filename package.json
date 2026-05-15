@@ -26,6 +26,7 @@
     "openclaw:approve": "tsx src/scripts/openclawApprove.ts",
     "openclaw:execute-approved": "tsx src/scripts/openclawExecuteApproved.ts",
     "openclaw:stage-live-plan": "tsx src/scripts/openclawStageLivePlan.ts",
+    "openclaw:probe": "tsx src/scripts/openclawProbe.ts",
     "polymarket:derive-api-key": "tsx src/scripts/polymarketDeriveApiKey.ts",
     "lint": "tsc -p tsconfig.json --noEmit",
     "typecheck": "tsc -p tsconfig.json --noEmit"

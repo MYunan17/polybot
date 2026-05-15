@@ -22,9 +22,9 @@ export class OpenClawClient {
   }
 
   async placeLimitOrder(request: ExecutionRequest): Promise<ExecutionResult> {
+    const { url, path } = this.buildSubmitUrl();
     try {
-      // TODO: adjust payload/endpoint to actual OpenClaw API contract.
-      const res = await axios.post(`${config.OPENCLAW_URL}/orders/limit`, request, {
+      const res = await axios.post(url, request, {
         headers: this.headers(),
         timeout: 10000
       });
@@ -32,11 +32,14 @@ export class OpenClawClient {
         status: "submitted",
         orderId: String(res.data?.orderId ?? ""),
         txHash: res.data?.txHash ? String(res.data.txHash) : undefined,
-        message: "Order submitted",
+        message: `Order submitted via ${path}`,
         raw: res.data
       };
     } catch (err: any) {
-      return { status: "failed", message: err?.message ?? "OpenClaw request failed", raw: err?.response?.data };
+      const status = err?.response?.status;
+      const preview = this.safePreview(err?.response?.data);
+      const message = `HTTP ${status ?? "?"} POST ${path} failed: ${err?.message ?? "Unknown error"}${preview ? ` | body: ${preview}` : ""}`;
+      return { status: "failed", message, raw: { status, body: preview } };
     }
   }
 
@@ -47,5 +50,29 @@ export class OpenClawClient {
 
   private headers(): Record<string, string> {
     return config.OPENCLAW_API_KEY ? { "x-api-key": config.OPENCLAW_API_KEY } : {};
+  }
+
+  private buildSubmitUrl(): { url: string; path: string } {
+    const base = (config.OPENCLAW_URL ?? "").trim();
+    const path = (config.OPENCLAW_SUBMIT_ORDER_PATH ?? "").trim();
+    if (!base) {
+      throw new Error("OPENCLAW_URL not configured");
+    }
+    if (!path) {
+      throw new Error("OPENCLAW_SUBMIT_ORDER_PATH not configured");
+    }
+    const normalizedBase = base.endsWith("/") ? base.slice(0, -1) : base;
+    const normalizedPath = path.startsWith("/") ? path : `/${path}`;
+    return { url: `${normalizedBase}${normalizedPath}`, path: normalizedPath };
+  }
+
+  private safePreview(data: unknown): string {
+    if (data == null) return "";
+    try {
+      const str = typeof data === "string" ? data : JSON.stringify(data);
+      return str.length > 200 ? `${str.slice(0, 200)}…` : str;
+    } catch {
+      return "[unserializable]";
+    }
   }
 }

@@ -62,10 +62,16 @@ export class OpenClawLiveExecutor {
 
     const missingCredentials = getMissingOpenClawCredentials(this.cfg);
     const credentialsReady = missingCredentials.length === 0;
+    const submitPathConfigured = Boolean(this.cfg.OPENCLAW_SUBMIT_ORDER_PATH?.trim());
     if (this.cfg.OPENCLAW_KILL_SWITCH) {
       logger.warn(
         { killSwitch: true, plans: plans.length },
         "OpenClaw kill switch enabled; all approved plans will be recorded as skipped"
+      );
+    } else if (!submitPathConfigured) {
+      logger.error(
+        { plans: plans.length },
+        "OPENCLAW_SUBMIT_ORDER_PATH not configured; refusing to submit live orders"
       );
     } else if (!credentialsReady) {
       logger.error(
@@ -82,6 +88,12 @@ export class OpenClawLiveExecutor {
       if (this.cfg.OPENCLAW_KILL_SWITCH) {
         await this.record(plan, "skipped_kill_switch", "Kill switch enabled");
         stats.skippedKillSwitch += 1;
+        continue;
+      }
+
+      if (!submitPathConfigured) {
+        await this.record(plan, "failed", "OPENCLAW_SUBMIT_ORDER_PATH not configured");
+        stats.failed += 1;
         continue;
       }
 
