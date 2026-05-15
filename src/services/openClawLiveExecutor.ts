@@ -18,6 +18,12 @@ export function getMissingOpenClawCredentials(cfg: AppConfig): string[] {
   if (!cfg.OPENCLAW_API_KEY?.trim()) {
     missing.push("OPENCLAW_API_KEY");
   }
+  if (!cfg.OPENCLAW_API_SECRET?.trim()) {
+    missing.push("OPENCLAW_API_SECRET");
+  }
+  if (!cfg.OPENCLAW_API_PASSPHRASE?.trim()) {
+    missing.push("OPENCLAW_API_PASSPHRASE");
+  }
   if (!cfg.POLYMARKET_PRIVATE_KEY?.trim()) {
     missing.push("POLYMARKET_PRIVATE_KEY");
   }
@@ -62,16 +68,10 @@ export class OpenClawLiveExecutor {
 
     const missingCredentials = getMissingOpenClawCredentials(this.cfg);
     const credentialsReady = missingCredentials.length === 0;
-    const submitPathConfigured = Boolean(this.cfg.OPENCLAW_SUBMIT_ORDER_PATH?.trim());
     if (this.cfg.OPENCLAW_KILL_SWITCH) {
       logger.warn(
         { killSwitch: true, plans: plans.length },
         "OpenClaw kill switch enabled; all approved plans will be recorded as skipped"
-      );
-    } else if (!submitPathConfigured) {
-      logger.error(
-        { plans: plans.length },
-        "OPENCLAW_SUBMIT_ORDER_PATH not configured; refusing to submit live orders"
       );
     } else if (!credentialsReady) {
       logger.error(
@@ -88,12 +88,6 @@ export class OpenClawLiveExecutor {
       if (this.cfg.OPENCLAW_KILL_SWITCH) {
         await this.record(plan, "skipped_kill_switch", "Kill switch enabled");
         stats.skippedKillSwitch += 1;
-        continue;
-      }
-
-      if (!submitPathConfigured) {
-        await this.record(plan, "failed", "OPENCLAW_SUBMIT_ORDER_PATH not configured");
-        stats.failed += 1;
         continue;
       }
 
@@ -144,7 +138,7 @@ export class OpenClawLiveExecutor {
         continue;
       }
 
-      const request = await this.buildExecutionRequest(plan, cappedOrderSize);
+      const request = await buildExecutionRequestFromPlan(this.store, plan, this.cfg, cappedOrderSize, plan.limitPrice);
       if (!request) {
         await this.record(plan, "failed", "Unable to build execution request");
         stats.failed += 1;
@@ -174,51 +168,6 @@ export class OpenClawLiveExecutor {
     return stats;
   }
 
-  private async buildExecutionRequest(plan: OpenClawPlanRow, sizeUsd: number): Promise<ExecutionRequest | null> {
-    if (!plan.tokenId) return null;
-    if (plan.side !== "YES" && plan.side !== "NO") return null;
-    const snapshot = await this.store.getMarketSnapshot(plan.marketId);
-
-    const planJson = plan.planJson ?? {};
-    const metadataFromPlan = (planJson.metadata ?? {}) as Partial<ExecutionRequest["metadata"]>;
-
-    const question =
-      snapshot?.question ?? (typeof planJson.question === "string" ? planJson.question : undefined) ?? "Unknown market";
-    const resolutionDate =
-      snapshot?.resolutionDate ??
-      (typeof planJson.resolution_date === "string" ? planJson.resolution_date : undefined) ??
-      "";
-
-    const metadata: ExecutionRequest["metadata"] = {
-      rawProbability: this.numberOr(metadataFromPlan.rawProbability, snapshot?.currentYesPrice ?? 0),
-      adjustedProbability: this.numberOr(
-        metadataFromPlan.adjustedProbability,
-        snapshot?.currentYesPrice ?? metadataFromPlan.rawProbability ?? 0
-      ),
-      edge: this.numberOr(metadataFromPlan.edge, snapshot?.spread ?? 0),
-      spread: this.numberOr(metadataFromPlan.spread, snapshot?.spread ?? 0),
-      resolutionDate
-    };
-
-    const maxSlippage = plan.maxSlippage ?? this.cfg.OPENCLAW_PRICE_SLIPPAGE_BPS / 10_000;
-
-    const request: ExecutionRequest = {
-      marketId: plan.marketId,
-      question,
-      tokenId: plan.tokenId,
-      side: plan.side,
-      action: "BUY",
-      limitPrice: plan.limitPrice,
-      sizeUsd,
-      maxSlippage,
-      dryRun: false,
-      reason: plan.reason ?? "Approved OpenClaw plan",
-      metadata
-    };
-
-    return request;
-  }
-
   private async record(
     plan: OpenClawPlanRow,
     status: ExecutionResult["status"],
@@ -243,7 +192,51 @@ export class OpenClawLiveExecutor {
     logger.info({ planId: plan.id, marketId: plan.marketId, status }, `OpenClaw plan ${status}`);
   }
 
-  private numberOr(value: unknown, fallback: number): number {
-    return typeof value === "number" && Number.isFinite(value) ? value : fallback;
-  }
+}
+
+export async function buildExecutionRequestFromPlan(
+  store: SqliteStore,
+  plan: OpenClawPlanRow,
+  cfg: AppConfig,
+  sizeUsd: number,
+  limitPrice: number
+): Promise<ExecutionRequest | null> {
+  if (!plan.tokenId) return null;
+  if (plan.side !== "YES" && plan.side !== "NO") return null;
+  const snapshot = await store.getMarketSnapshot(plan.marketId);
+
+  const planJson = plan.planJson ?? {};
+  const metadataFromPlan = (planJson.metadata ?? {}) as Partial<ExecutionRequest["metadata"]>;
+
+  const question = snapshot?.question ?? (typeof planJson.question === "string" ? planJson.question : undefined) ?? "Unknown market";
+  const resolutionDate =
+    snapshot?.resolutionDate ?? (typeof planJson.resolution_date === "string" ? planJson.resolution_date : undefined) ?? "";
+
+  const metadata: ExecutionRequest["metadata"] = {
+    rawProbability: numberOr(metadataFromPlan.rawProbability, snapshot?.currentYesPrice ?? 0),
+    adjustedProbability: numberOr(metadataFromPlan.adjustedProbability, snapshot?.currentYesPrice ?? metadataFromPlan.rawProbability ?? 0),
+    edge: numberOr(metadataFromPlan.edge, snapshot?.spread ?? 0),
+    spread: numberOr(metadataFromPlan.spread, snapshot?.spread ?? 0),
+    resolutionDate
+  };
+
+  const maxSlippage = plan.maxSlippage ?? cfg.OPENCLAW_PRICE_SLIPPAGE_BPS / 10_000;
+
+  return {
+    marketId: plan.marketId,
+    question,
+    tokenId: plan.tokenId,
+    side: plan.side,
+    action: "BUY",
+    limitPrice,
+    sizeUsd,
+    maxSlippage,
+    dryRun: false,
+    reason: plan.reason ?? "Approved OpenClaw plan",
+    metadata
+  };
+}
+
+function numberOr(value: unknown, fallback: number): number {
+  return typeof value === "number" && Number.isFinite(value) ? value : fallback;
 }
