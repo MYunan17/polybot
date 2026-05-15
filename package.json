@@ -28,6 +28,7 @@
     "openclaw:stage-live-plan": "tsx src/scripts/openclawStageLivePlan.ts",
     "openclaw:probe": "tsx src/scripts/openclawProbe.ts",
     "openclaw:build-order": "tsx src/scripts/openclawBuildOrder.ts",
+    "openclaw:executions": "tsx src/scripts/openclawExecutions.ts",
     "polymarket:derive-api-key": "tsx src/scripts/polymarketDeriveApiKey.ts",
     "lint": "tsc -p tsconfig.json --noEmit",
     "typecheck": "tsc -p tsconfig.json --noEmit"

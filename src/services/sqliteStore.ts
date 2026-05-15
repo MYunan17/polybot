@@ -26,6 +26,25 @@ interface OpenPaperTradeRow {
   created_at: string;
 }
 
+function mapOpenClawExecutionRow(row: any): OpenClawExecutionRow {
+  return {
+    id: row.id,
+    planId: row.plan_id,
+    runId: row.run_id,
+    marketId: row.market_id,
+    action: row.action,
+    side: row.side,
+    tokenId: row.token_id ?? undefined,
+    sizeUsd: Number(row.size_usd ?? 0),
+    limitPrice: Number(row.limit_price ?? 0),
+    status: row.status,
+    txOrOrderId: row.tx_or_order_id ?? undefined,
+    errorMessage: row.error_message ?? undefined,
+    dryRun: Boolean(row.dry_run),
+    createdAt: row.created_at
+  };
+}
+
 interface PaperTradeDbRow {
   id: number;
   run_id: string;
@@ -119,6 +138,23 @@ export interface OpenClawExecutionInsert {
   txOrOrderId?: string;
   errorMessage?: string;
   dryRun: boolean;
+}
+
+export interface OpenClawExecutionRow {
+  id: number;
+  planId: number;
+  runId: string;
+  marketId: string;
+  action: string;
+  side: string;
+  tokenId?: string;
+  sizeUsd: number;
+  limitPrice: number;
+  status: string;
+  txOrOrderId?: string;
+  errorMessage?: string;
+  dryRun: boolean;
+  createdAt: string;
 }
 
 function mapPaperTradeRow(row: PaperTradeDbRow): PaperTradeRecord {
@@ -304,6 +340,19 @@ export class SqliteStore {
       acc[row.status] = row.count;
       return acc;
     }, {});
+  }
+
+  async listOpenClawExecutions(limit = 20): Promise<OpenClawExecutionRow[]> {
+    const db = await getDb();
+    const rows = await db.all<any[]>(
+      `SELECT id, plan_id, run_id, market_id, action, side, token_id, size_usd, limit_price, status,
+              tx_or_order_id, error_message, dry_run, created_at
+       FROM openclaw_executions
+       ORDER BY id DESC
+       LIMIT ?`,
+      limit
+    );
+    return rows.map(mapOpenClawExecutionRow);
   }
 
   async countOpenClawPlans(runId?: string): Promise<number> {

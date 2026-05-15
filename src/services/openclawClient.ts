@@ -13,6 +13,7 @@ import { polygon, polygonAmoy } from "viem/chains";
 import { privateKeyToAccount } from "viem/accounts";
 import { config } from "../config";
 import { ExecutionRequest, ExecutionResult } from "../types";
+import { logger } from "../logger";
 
 export class OpenClawClient {
   private clob?: ClobClient;
@@ -40,7 +41,8 @@ export class OpenClawClient {
       const client = await this.ensureClobClient();
       const { userOrder } = this.prepareUserOrder(request);
       const response = await client.createAndPostOrder(userOrder, undefined, OrderType.GTC, false, true);
-      const orderId = response?.order_id ?? response?.orderId ?? response?.id ?? undefined;
+      const orderId = this.extractOrderId(response);
+      logger.debug({ orderKeys: this.safeKeys(response) }, "Polymarket CLOB order response keys");
       return {
         status: "submitted",
         orderId,
@@ -62,7 +64,7 @@ export class OpenClawClient {
     const client = await this.ensureClobClient();
     const { userOrder, sizeTokens } = this.prepareUserOrder(request);
     const signed = await client.createOrder(userOrder);
-    const orderHash = (signed as any)?.orderHash ?? (signed as any)?.id ?? undefined;
+    const orderHash = this.extractOrderId(signed);
     return { tokenId: userOrder.tokenID, price: userOrder.price, sizeTokens, orderHash };
   }
 
@@ -160,5 +162,27 @@ export class OpenClawClient {
     } catch {
       return "[unserializable]";
     }
+  }
+
+  private extractOrderId(response: any): string | undefined {
+    if (!response) return undefined;
+    const candidates = [
+      response.orderID,
+      response.orderId,
+      response.id,
+      response.hash,
+      response.orderHash,
+      response.transactionHash,
+      response?.data?.orderId,
+      response?.data?.id,
+      response?.data?.orderHash
+    ];
+    const match = candidates.find((value) => typeof value === "string" && value.trim().length > 0);
+    return match?.trim();
+  }
+
+  private safeKeys(response: any): string[] {
+    if (!response || typeof response !== "object") return [];
+    return Object.keys(response).slice(0, 20);
   }
 }
