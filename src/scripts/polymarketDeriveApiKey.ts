@@ -3,7 +3,7 @@ import path from "node:path";
 import process from "node:process";
 import { Chain as ClobChain, ClobClient, SignatureTypeV2 } from "@polymarket/clob-client-v2";
 import { privateKeyToAccount } from "viem/accounts";
-import { createWalletClient, http, type Chain as ViemChain } from "viem";
+import { createWalletClient, getAddress, http, type Chain as ViemChain } from "viem";
 import { polygon, polygonAmoy } from "viem/chains";
 import { config } from "../config";
 import { logger } from "../logger";
@@ -28,6 +28,38 @@ function normalizePrivateKey(raw?: string): `0x${string}` {
     throw new Error("POLYMARKET_PRIVATE_KEY is required");
   }
   return trimmed.startsWith("0x") ? (trimmed as `0x${string}`) : (`0x${trimmed}` as `0x${string}`);
+}
+
+function normalizeAddress(raw?: string): `0x${string}` | undefined {
+  const trimmed = raw?.trim();
+  if (!trimmed) {
+    return undefined;
+  }
+  try {
+    return getAddress(trimmed);
+  } catch {
+    throw new Error(`Invalid POLYMARKET_FUNDER_ADDRESS=${trimmed}`);
+  }
+}
+
+function shortAddress(value?: string): string {
+  if (!value) return "";
+  return value.length > 12 ? `${value.slice(0, 6)}…${value.slice(-4)}` : value;
+}
+
+function resolveSignatureType(): { signatureType: SignatureTypeV2; funder?: `0x${string}` } {
+  const typeValue = Number(config.POLYMARKET_SIGNATURE_TYPE ?? 0);
+  if (typeValue === SignatureTypeV2.POLY_1271) {
+    const funder = normalizeAddress(config.POLYMARKET_FUNDER_ADDRESS);
+    if (!funder) {
+      throw new Error("POLYMARKET_SIGNATURE_TYPE=3 requires POLYMARKET_FUNDER_ADDRESS (deposit wallet)");
+    }
+    return { signatureType: SignatureTypeV2.POLY_1271, funder };
+  }
+  if (typeValue === SignatureTypeV2.EOA) {
+    return { signatureType: SignatureTypeV2.EOA };
+  }
+  throw new Error(`Unsupported POLYMARKET_SIGNATURE_TYPE=${config.POLYMARKET_SIGNATURE_TYPE}`);
 }
 
 function resolveChains(chainId: number): { clob: ClobChain; viem: ViemChain; rpcUrl: string } {
@@ -67,22 +99,28 @@ async function upsertEnvFile(values: Record<string, string>): Promise<void> {
 void (async () => {
   const options = parseArgs();
   const privateKey = normalizePrivateKey(config.POLYMARKET_PRIVATE_KEY);
-  if (config.POLYMARKET_SIGNATURE_TYPE !== SignatureTypeV2.EOA) {
-    throw new Error("Only SignatureType=0 (EOA) is supported for automatic API key derivation");
-  }
+  const { signatureType, funder } = resolveSignatureType();
 
   const { clob, viem, rpcUrl } = resolveChains(config.POLYMARKET_CHAIN_ID);
   const account = privateKeyToAccount(privateKey);
   const wallet = createWalletClient({ account, chain: viem, transport: http(rpcUrl) });
 
   const host = process.env.POLYMARKET_CLOB_HOST?.trim() || DEFAULT_CLOB_HOSTS[clob] || DEFAULT_CLOB_HOSTS[ClobChain.POLYGON];
-  const funder = config.POLYMARKET_FUNDER_ADDRESS?.trim() || undefined;
+
+  logger.info(
+    {
+      signer: shortAddress(account.address),
+      funder: shortAddress(funder),
+      signatureType
+    },
+    "Preparing Polymarket API key derivation"
+  );
 
   const client = new ClobClient({
     host,
     chain: clob,
     signer: wallet,
-    signatureType: SignatureTypeV2.EOA,
+    signatureType,
     funderAddress: funder
   });
   const creds = await client.createOrDeriveApiKey();
@@ -93,6 +131,9 @@ void (async () => {
     OPENCLAW_API_PASSPHRASE: creds.passphrase
   };
 
+  console.log(`signer_address=${shortAddress(account.address)}`);
+  console.log(`funder_address=${shortAddress(funder) || "n/a"}`);
+  console.log(`signature_type=${signatureType}`);
   Object.entries(output).forEach(([key, value]) => {
     console.log(`${key}=${value}`);
   });

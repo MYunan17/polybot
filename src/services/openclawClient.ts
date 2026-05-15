@@ -11,7 +11,7 @@ import {
   type Trade,
   type UserOrderV2
 } from "@polymarket/clob-client-v2";
-import { createWalletClient, http, type Chain } from "viem";
+import { createWalletClient, getAddress, http, type Chain } from "viem";
 import { polygon, polygonAmoy } from "viem/chains";
 import { privateKeyToAccount } from "viem/accounts";
 import { config } from "../config";
@@ -145,8 +145,8 @@ export class OpenClawClient {
     const rpcUrl = config.POLYMARKET_RPC_URL?.trim() || defaultRpc;
     const wallet = createWalletClient({ account, chain: viemChain, transport: http(rpcUrl) });
     const creds = this.resolveApiCreds();
-    const signatureType = this.resolveSignatureType();
-    const funder = config.POLYMARKET_FUNDER_ADDRESS?.trim() || undefined;
+    const funder = this.normalizeAddress(config.POLYMARKET_FUNDER_ADDRESS);
+    const signatureType = this.resolveSignatureType(funder);
     this.clob = new ClobClient({
       host,
       chain: clobChain,
@@ -197,11 +197,18 @@ export class OpenClawClient {
     return { key, secret, passphrase };
   }
 
-  private resolveSignatureType(): SignatureTypeV2 {
-    if (config.POLYMARKET_SIGNATURE_TYPE === SignatureTypeV2.EOA) {
+  private resolveSignatureType(funder?: `0x${string}`): SignatureTypeV2 {
+    const typeValue = Number(config.POLYMARKET_SIGNATURE_TYPE ?? 0);
+    if (typeValue === SignatureTypeV2.POLY_1271) {
+      if (!funder) {
+        throw new Error("POLYMARKET_SIGNATURE_TYPE=3 requires POLYMARKET_FUNDER_ADDRESS (deposit wallet)");
+      }
+      return SignatureTypeV2.POLY_1271;
+    }
+    if (typeValue === SignatureTypeV2.EOA) {
       return SignatureTypeV2.EOA;
     }
-    throw new Error("Only SignatureType=0 (EOA) is supported for CLOB execution");
+    throw new Error(`Unsupported POLYMARKET_SIGNATURE_TYPE=${config.POLYMARKET_SIGNATURE_TYPE}`);
   }
 
   private resolveChain(chainId: number): { clobChain: ClobChain; viemChain: Chain; defaultRpc: string } {
@@ -224,13 +231,62 @@ export class OpenClawClient {
     return trimmed.startsWith("0x") ? (trimmed as `0x${string}`) : (`0x${trimmed}` as `0x${string}`);
   }
 
+  private normalizeAddress(raw?: string): `0x${string}` | undefined {
+    const trimmed = raw?.trim();
+    if (!trimmed) return undefined;
+    try {
+      return getAddress(trimmed);
+    } catch {
+      throw new Error(`Invalid POLYMARKET_FUNDER_ADDRESS=${trimmed}`);
+    }
+  }
+
   private describeClobError(err: any): { message: string; raw?: unknown } {
     const status = err?.response?.status;
     const preview = this.safeResponsePreview(err?.response?.data ?? err?.data);
     const baseMessage = err?.message ?? "Polymarket CLOB request failed";
     const statusPart = status ? `HTTP ${status}` : "";
-    const detail = [statusPart, baseMessage, preview && `body: ${preview}`].filter(Boolean).join(" | ");
+    const suggestion = this.shouldSuggestDepositFlow(err)
+      ? "Suggestion: set POLYMARKET_SIGNATURE_TYPE=3 and configure POLYMARKET_FUNDER_ADDRESS per Polymarket deposit wallet flow."
+      : "";
+    const detail = [statusPart, baseMessage, preview && `body: ${preview}`, suggestion].filter(Boolean).join(" | ");
     return { message: detail || "Polymarket CLOB request failed", raw: err?.response?.data ?? err?.data ?? err?.message };
+  }
+
+  private shouldSuggestDepositFlow(err: any): boolean {
+    if (config.POLYMARKET_SIGNATURE_TYPE === SignatureTypeV2.POLY_1271) {
+      return false;
+    }
+    return this.includesMakerAddressNotAllowed(err);
+  }
+
+  private includesMakerAddressNotAllowed(err: any): boolean {
+    const needles = ["maker address not allowed", "deposit wallet flow"];
+    const candidates = [
+      err?.response?.data?.error,
+      err?.response?.data?.message,
+      err?.response?.data,
+      err?.data,
+      err?.message
+    ];
+    for (const candidate of candidates) {
+      let str: string | undefined;
+      if (typeof candidate === "string") {
+        str = candidate;
+      } else if (candidate && typeof candidate === "object") {
+        try {
+          str = JSON.stringify(candidate);
+        } catch {
+          str = undefined;
+        }
+      }
+      if (!str) continue;
+      const lower = str.toLowerCase();
+      if (needles.some((needle) => lower.includes(needle))) {
+        return true;
+      }
+    }
+    return false;
   }
 
   private safePreview(data: unknown): string {

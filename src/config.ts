@@ -108,5 +108,15 @@ const envSchema = z.object({
   NEWS_RSS_URLS: z.string().optional().default("")
 });
 
-export const config = envSchema.parse(process.env);
+const parsed = envSchema.parse(process.env);
+const funderAddress = parsed.POLYMARKET_FUNDER_ADDRESS?.trim();
+if (funderAddress) {
+  parsed.POLYMARKET_FUNDER_ADDRESS = funderAddress;
+}
+const signatureEnvRaw = process.env.POLYMARKET_SIGNATURE_TYPE?.trim();
+if (!signatureEnvRaw && funderAddress && parsed.POLYMARKET_SIGNATURE_TYPE !== 3) {
+  parsed.POLYMARKET_SIGNATURE_TYPE = 3;
+}
+
+export const config = parsed;
 export type AppConfig = typeof config;

@@ -5,6 +5,18 @@ import { OpenClawClient } from "../services/openclawClient";
 import { buildExecutionRequestFromPlan } from "../services/openClawLiveExecutor";
 import { SqliteStore } from "../services/sqliteStore";
 
+function shortValue(value?: string): string {
+  if (!value) return "n/a";
+  return value.length > 12 ? `${value.slice(0, 6)}…${value.slice(-4)}` : value;
+}
+
+function signatureTypeLabel(): string {
+  const typeValue = Number(config.POLYMARKET_SIGNATURE_TYPE ?? 0);
+  if (typeValue === 3) return "POLY_1271";
+  if (typeValue === 0) return "EOA";
+  return `type_${typeValue}`;
+}
+
 interface CliOptions {
   planId: number;
 }
@@ -54,6 +66,8 @@ void (async () => {
   console.log(`price=${preview.price.toFixed(4)}`);
   console.log(`limit_price=${request.limitPrice.toFixed(4)}`);
   console.log(`order_type=${preview.orderType}`);
+  console.log(`signature_type=${config.POLYMARKET_SIGNATURE_TYPE} (${signatureTypeLabel()})`);
+  console.log(`funder_address=${shortValue(config.POLYMARKET_FUNDER_ADDRESS)}`);
   console.log(`tick_size=${preview.tickSize}`);
   console.log(`neg_risk=${preview.negRisk}`);
   if (preview.orderHash) {
