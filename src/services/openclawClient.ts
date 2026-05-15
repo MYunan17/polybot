@@ -9,7 +9,6 @@ import {
   SignatureTypeV2,
   isV2Order,
   orderToJsonV2,
-  createL2Headers,
   type ApiKeyCreds,
   type BalanceAllowanceResponse,
   type CreateOrderOptions,
@@ -26,8 +25,6 @@ import { config } from "../config";
 import { ExecutionRequest, ExecutionResult } from "../types";
 import { logger } from "../logger";
 import { extractApiKeyOwnership, type ApiKeyOwnershipDetails } from "./apiKeyOwnership";
-
-const POST_ORDER_PATH = "/order";
 
 export class OpenClawClient {
   private clob?: ClobClient;
@@ -110,26 +107,19 @@ export class OpenClawClient {
 
   async placeLimitOrder(request: ExecutionRequest): Promise<ExecutionResult> {
     try {
-      const submitPath = (config.OPENCLAW_SUBMIT_PATH ?? "clob_direct") as "clob_direct" | "builder_relayer";
-      if (submitPath === "builder_relayer") {
-        this.ensureBuilderRelayerConfig();
-        throw new Error(
-          "OPENCLAW_SUBMIT_PATH=builder_relayer is not implemented yet; waiting for Polymarket relayer order endpoint confirmation"
-        );
-      }
-
       await this.assertApiKeyOwnershipMatches();
-      const { payload, payloadJson, payloadHash } = await this.buildVersionedPostPayload(request);
-      const response = await this.submitVersionedPayload(payload, payloadJson);
+      const client = await this.ensureClobClient();
+      const { userOrder, sizeTokens } = this.prepareUserOrder(request);
+      const options = this.orderOptions();
+      const response = await client.createAndPostOrder(userOrder, options, OrderType.GTC);
       const orderId = this.extractOrderId(response);
-      logger.debug({ livePayloadSha256: payloadHash }, "Polymarket CLOB live payload hash");
       logger.debug({ orderKeys: this.safeKeys(response), dataKeys: this.safeKeys(response?.data) }, "Polymarket CLOB order response keys");
       const responsePreview = this.safeResponsePreview(response);
       if (orderId) {
         return {
           status: "submitted",
           orderId,
-          message: `Polymarket CLOB order submitted at ${(request.limitPrice * 100).toFixed(2)}%`,
+          message: `Polymarket CLOB order submitted at ${(request.limitPrice * 100).toFixed(2)}% (size=${sizeTokens.toFixed(4)} tokens)`,
           raw: this.sanitizedResponse(response)
         };
       }
@@ -343,36 +333,15 @@ export class OpenClawClient {
   }
 
   private resolveOrderOwner(): string {
-    const funder = this.normalizeAddress(config.POLYMARKET_FUNDER_ADDRESS);
-    if (!funder) {
-      throw new Error("POLYMARKET_FUNDER_ADDRESS is required for deposit wallet orders");
+    const apiKey = config.OPENCLAW_API_KEY?.trim();
+    if (!apiKey) {
+      throw new Error("OPENCLAW_API_KEY is required to build order payloads");
     }
-    return funder;
+    return apiKey;
   }
 
   private hashPayload(serialized: string): string {
     return createHash("sha256").update(serialized).digest("hex");
-  }
-
-  private async submitVersionedPayload(payload: NewOrderV2<OrderType>, payloadJson: string): Promise<any> {
-    await this.ensureClobClient();
-    if (!this.clobSigner || !this.clobCreds || !this.clobHost) {
-      throw new Error("Clob client is not fully initialized");
-    }
-    const l2HeaderArgs = {
-      method: "POST",
-      requestPath: POST_ORDER_PATH,
-      body: payloadJson
-    } as const;
-    const headers = await createL2Headers(this.clobSigner, this.clobCreds, l2HeaderArgs);
-    const response = await axios.post(`${this.clobHost}${POST_ORDER_PATH}`, payload, {
-      headers: {
-        ...headers,
-        "Content-Type": "application/json"
-      },
-      timeout: 8000
-    });
-    return response?.data ?? response;
   }
 
   private resolveSignatureType(funder?: `0x${string}`): SignatureTypeV2 {
@@ -428,35 +397,6 @@ export class OpenClawClient {
       return getAddress(trimmed);
     } catch {
       throw new Error(`Invalid POLYMARKET_FUNDER_ADDRESS=${trimmed}`);
-    }
-  }
-
-  private ensureBuilderRelayerConfig(): void {
-    const relayerKey = config.POLYMARKET_RELAYER_API_KEY?.trim();
-    const relayerAddressRaw = config.POLYMARKET_RELAYER_API_KEY_ADDRESS?.trim();
-    if (!relayerKey) {
-      throw new Error("OPENCLAW_SUBMIT_PATH=builder_relayer requires POLYMARKET_RELAYER_API_KEY");
-    }
-    if (!relayerAddressRaw) {
-      throw new Error("OPENCLAW_SUBMIT_PATH=builder_relayer requires POLYMARKET_RELAYER_API_KEY_ADDRESS");
-    }
-    let relayerAddress: `0x${string}`;
-    try {
-      relayerAddress = getAddress(relayerAddressRaw);
-    } catch {
-      throw new Error(`POLYMARKET_RELAYER_API_KEY_ADDRESS is not a valid address: ${relayerAddressRaw}`);
-    }
-    const funder = this.normalizeAddress(config.POLYMARKET_FUNDER_ADDRESS);
-    if (!funder) {
-      throw new Error("OPENCLAW_SUBMIT_PATH=builder_relayer requires POLYMARKET_FUNDER_ADDRESS to be configured");
-    }
-    if (funder.toLowerCase() !== relayerAddress.toLowerCase()) {
-      throw new Error(
-        `POLYMARKET_RELAYER_API_KEY_ADDRESS (${relayerAddress}) must match POLYMARKET_FUNDER_ADDRESS (${funder}) for builder relayer submissions`
-      );
-    }
-    if (config.POLYMARKET_SIGNATURE_TYPE !== SignatureTypeV2.POLY_1271) {
-      throw new Error("OPENCLAW_SUBMIT_PATH=builder_relayer requires POLYMARKET_SIGNATURE_TYPE=3 (POLY_1271)");
     }
   }
 

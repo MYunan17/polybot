@@ -67,13 +67,8 @@ void (async () => {
   }
 
   const client = new OpenClawClient();
-  const { payload, payloadHash } = await client.buildVersionedPostPayload(request);
-
-  const relayerHeadersPresent = Boolean(
-    config.POLYMARKET_RELAYER_API_KEY?.trim() && config.POLYMARKET_RELAYER_API_KEY_ADDRESS?.trim()
-  );
+  const { payload, signedOrder, sizeTokens, payloadHash } = await client.buildVersionedPostPayload(request);
   const normalizedFunder = normalizeAddress(config.POLYMARKET_FUNDER_ADDRESS);
-  const signatureType = payload.order.signatureType;
   const owner = payload.owner;
   const maker = payload.order.maker;
   const signer = payload.order.signer;
@@ -85,40 +80,36 @@ void (async () => {
   const ownerIsNotFunder = ownerIsApiKey && !ownerMatchesFunder;
   const makerMatchesFunder = Boolean(normalizedFunder && maker?.toLowerCase() === normalizedFunder.toLowerCase());
   const signerMatchesFunder = Boolean(normalizedFunder && signer?.toLowerCase() === normalizedFunder.toLowerCase());
+  const signatureType = payload.order.signatureType;
+  const signatureTypeIsPoly1271 = Number(signatureType) === SignatureTypeV2.POLY_1271;
 
-  console.log("OpenClaw relayer payload preview:");
+  console.log("OpenClaw docs-aligned CLOB preview (no submission):");
   console.log(`plan_id=${plan.id}`);
   console.log(`market_id=${plan.marketId}`);
+  console.log(`order_type=${payload.orderType}`);
+  console.log(`docs_payload_sha256=${payloadHash}`);
   console.log(`owner_preview=${secretPreview(owner)}`);
   console.log(`owner_is_api_key=${ownerIsApiKey}`);
   console.log(`owner_is_not_funder=${ownerIsNotFunder}`);
   console.log(`maker=${preview(maker)}`);
   console.log(`signer=${preview(signer)}`);
+  console.log(`maker_matches_funder=${makerMatchesFunder}`);
+  console.log(`signer_matches_funder=${signerMatchesFunder}`);
   console.log(`tokenId=${payload.order.tokenId}`);
   console.log(`side=${payload.order.side}`);
   console.log(`makerAmount=${payload.order.makerAmount}`);
   console.log(`takerAmount=${payload.order.takerAmount}`);
   console.log(`signature_type=${signatureType}`);
-  console.log(`relayer_payload_sha256=${payloadHash}`);
-  console.log(`relayer_headers_present=${relayerHeadersPresent ? "yes" : "no"}`);
-  console.log(`maker_matches_funder=${makerMatchesFunder}`);
-  console.log(`signer_matches_funder=${signerMatchesFunder}`);
-
-  if (Number(signatureType) !== SignatureTypeV2.POLY_1271) {
-    console.log("warning=builder relayer path expects POLY_1271 signature type");
-  }
-
-  if (!relayerHeadersPresent) {
-    console.log("warning=Relayer API key/address not configured; configure POLYMARKET_RELAYER_API_KEY and POLYMARKET_RELAYER_API_KEY_ADDRESS");
-  }
-
+  console.log(`payload_signature_type_is_3=${signatureTypeIsPoly1271}`);
+  console.log(`size_tokens=${sizeTokens.toFixed(6)}`);
+  console.log(`price=${signedOrder.price}`);
   console.log(
-    "warning=Relayer handles wallet batches only; CLOB orders require OPENCLAW_API_* credentials + L2 headers (owner is API key)."
+    "warning=POLY_1271 deposit wallets: relayer auth is only for wallet deploy/batches. Orders always use CLOB API key + L2 headers."
   );
 
   await closeDb();
 })().catch(async (err) => {
-  logger.error({ err }, "openclaw:relayer-payload-preview failed");
+  logger.error({ err }, "openclaw:docs-clob-preview failed");
   await closeDb();
   process.exit(1);
 });

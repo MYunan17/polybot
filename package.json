@@ -36,6 +36,7 @@
     "openclaw:post-payload-preview": "tsx src/scripts/openclawPostPayloadPreview.ts",
     "openclaw:submit-dry-payload": "tsx src/scripts/openclawSubmitDryPayload.ts",
     "openclaw:relayer-payload-preview": "tsx src/scripts/openclawRelayerPayloadPreview.ts",
+    "openclaw:docs-clob-preview": "tsx src/scripts/openclawDocsClobPreview.ts",
     "polymarket:derive-api-key": "tsx src/scripts/polymarketDeriveApiKey.ts",
     "polymarket:whoami": "tsx src/scripts/polymarketWhoami.ts",
     "polymarket:discover-wallet": "tsx src/scripts/polymarketDiscoverWallet.ts",

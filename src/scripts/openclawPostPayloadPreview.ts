@@ -90,6 +90,9 @@ void (async () => {
   const ownerMatchesFunder = Boolean(
     normalizedFunder && typeof owner === "string" && owner.toLowerCase() === normalizedFunder.toLowerCase()
   );
+  const apiKey = config.OPENCLAW_API_KEY?.trim();
+  const ownerIsApiKey = Boolean(apiKey && owner === apiKey);
+  const ownerIsNotFunder = ownerIsApiKey && !ownerMatchesFunder;
   const makerMatchesFunder = Boolean(normalizedFunder && maker?.toLowerCase() === normalizedFunder.toLowerCase());
   const signerMatchesFunder = Boolean(normalizedFunder && signer?.toLowerCase() === normalizedFunder.toLowerCase());
   const signatureTypeIsPoly1271 = Number(signatureType) === SignatureTypeV2.POLY_1271;
@@ -100,6 +103,8 @@ void (async () => {
   console.log(`order_type=${payload.orderType}`);
   console.log(`preview_payload_sha256=${payloadHash}`);
   console.log(`owner_preview=${secretPreview(owner)}`);
+  console.log(`owner_is_api_key=${ownerIsApiKey}`);
+  console.log(`owner_is_not_funder=${ownerIsNotFunder}`);
   console.log(`maker=${preview(maker)}`);
   console.log(`signer=${preview(signer)}`);
   console.log(`tokenId=${tokenId}`);
@@ -124,8 +129,12 @@ void (async () => {
   console.log(`payload_signature_type_is_3=${signatureTypeIsPoly1271}`);
 
   if (signatureTypeIsPoly1271 && normalizedFunder && (!makerMatchesFunder || !signerMatchesFunder)) {
-    console.log("Deposit wallet signature mismatch: POLY_1271 orders must use deposit wallet as maker/signer.");
+    console.log("Deposit wallet signature mismatch: POLY_1271 orders must use the deposit wallet as maker/signer.");
   }
+
+  console.log(
+    "warning=For POLY_1271 deposit wallets, relayer auth handles wallet batches only. Orders always use CLOB API key + L2 headers."
+  );
 
   await closeDb();
 })().catch(async (err) => {
