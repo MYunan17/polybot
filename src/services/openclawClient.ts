@@ -1,3 +1,4 @@
+import { createHash } from "crypto";
 import axios from "axios";
 import {
   AssetType,
@@ -8,6 +9,7 @@ import {
   SignatureTypeV2,
   isV2Order,
   orderToJsonV2,
+  createL2Headers,
   type ApiKeyCreds,
   type BalanceAllowanceResponse,
   type CreateOrderOptions,
@@ -24,8 +26,13 @@ import { config } from "../config";
 import { ExecutionRequest, ExecutionResult } from "../types";
 import { logger } from "../logger";
 
+const POST_ORDER_PATH = "/order";
+
 export class OpenClawClient {
   private clob?: ClobClient;
+  private clobSigner?: ReturnType<typeof createWalletClient>;
+  private clobCreds?: ApiKeyCreds;
+  private clobHost?: string;
 
   async healthCheck(): Promise<boolean> {
     try {
@@ -47,15 +54,10 @@ export class OpenClawClient {
 
   async placeLimitOrder(request: ExecutionRequest): Promise<ExecutionResult> {
     try {
-      const client = await this.ensureClobClient();
-      const { userOrder } = this.prepareUserOrder(request);
-      const options = this.orderOptions();
-      const signedOrder = await client.createOrder(userOrder, options);
-      if (!isV2Order(signedOrder)) {
-        throw new Error("Polymarket deposit wallets require V2 order payloads");
-      }
-      const response = await client.postOrder(signedOrder, OrderType.GTC);
+      const { payload, payloadJson, payloadHash } = await this.buildVersionedPostPayload(request);
+      const response = await this.submitVersionedPayload(payload, payloadJson);
       const orderId = this.extractOrderId(response);
+      logger.debug({ livePayloadSha256: payloadHash }, "Polymarket CLOB live payload hash");
       logger.debug({ orderKeys: this.safeKeys(response), dataKeys: this.safeKeys(response?.data) }, "Polymarket CLOB order response keys");
       const responsePreview = this.safeResponsePreview(response);
       if (orderId) {
@@ -136,10 +138,12 @@ export class OpenClawClient {
     return { signedOrder, userOrder, sizeTokens };
   }
 
-  async buildPostPayloadPreview(request: ExecutionRequest): Promise<{
+  async buildVersionedPostPayload(request: ExecutionRequest): Promise<{
     payload: NewOrderV2<OrderType>;
     signedOrder: SignedOrder;
     sizeTokens: number;
+    payloadJson: string;
+    payloadHash: string;
   }> {
     const client = await this.ensureClobClient();
     const { userOrder, sizeTokens } = this.prepareUserOrder(request);
@@ -150,7 +154,9 @@ export class OpenClawClient {
     }
     const owner = this.resolveOrderOwner();
     const payload = orderToJsonV2(signedOrder, owner, OrderType.GTC, false, false);
-    return { payload, signedOrder, sizeTokens };
+    const payloadJson = JSON.stringify(payload);
+    const payloadHash = this.hashPayload(payloadJson);
+    return { payload, signedOrder, sizeTokens, payloadJson, payloadHash };
   }
 
   async listOpenOrders(limit = 20): Promise<OpenOrder[]> {
@@ -206,6 +212,9 @@ export class OpenClawClient {
       signatureType,
       funderAddress: funder
     });
+    this.clobSigner = wallet;
+    this.clobCreds = creds;
+    this.clobHost = host;
     return this.clob;
   }
 
@@ -254,6 +263,31 @@ export class OpenClawClient {
       throw new Error("POLYMARKET_FUNDER_ADDRESS is required for deposit wallet orders");
     }
     return funder;
+  }
+
+  private hashPayload(serialized: string): string {
+    return createHash("sha256").update(serialized).digest("hex");
+  }
+
+  private async submitVersionedPayload(payload: NewOrderV2<OrderType>, payloadJson: string): Promise<any> {
+    await this.ensureClobClient();
+    if (!this.clobSigner || !this.clobCreds || !this.clobHost) {
+      throw new Error("Clob client is not fully initialized");
+    }
+    const l2HeaderArgs = {
+      method: "POST",
+      requestPath: POST_ORDER_PATH,
+      body: payloadJson
+    } as const;
+    const headers = await createL2Headers(this.clobSigner, this.clobCreds, l2HeaderArgs);
+    const response = await axios.post(`${this.clobHost}${POST_ORDER_PATH}`, payload, {
+      headers: {
+        ...headers,
+        "Content-Type": "application/json"
+      },
+      timeout: 8000
+    });
+    return response?.data ?? response;
   }
 
   private resolveSignatureType(funder?: `0x${string}`): SignatureTypeV2 {
