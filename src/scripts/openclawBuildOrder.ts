@@ -41,16 +41,21 @@ void (async () => {
 
   const client = new OpenClawClient();
   const preview = await client.buildLimitOrder(request);
-  const tokenShort = preview.tokenId ? `${preview.tokenId.slice(0, 6)}…` : "n/a";
+  const tokenShort = preview.tokenID ? `${preview.tokenID.slice(0, 6)}…` : "n/a";
 
   console.log("OpenClaw order build preview:");
   console.log(`plan_id=${plan.id}`);
   console.log(`market_id=${plan.marketId}`);
   console.log(`token_id=${tokenShort}`);
-  console.log(`side=${plan.side}`);
+  console.log(`tokenID=${preview.tokenID}`);
+  console.log(`side=${preview.side}`);
   console.log(`size_usd=${request.sizeUsd.toFixed(2)}`);
   console.log(`size_tokens=${preview.sizeTokens.toFixed(4)}`);
+  console.log(`price=${preview.price.toFixed(4)}`);
   console.log(`limit_price=${request.limitPrice.toFixed(4)}`);
+  console.log(`order_type=${preview.orderType}`);
+  console.log(`tick_size=${preview.tickSize}`);
+  console.log(`neg_risk=${preview.negRisk}`);
   if (preview.orderHash) {
     console.log(`order_hash=${preview.orderHash}`);
   }

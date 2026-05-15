@@ -4,12 +4,13 @@ import {
   ClobClient,
   OrderType,
   Side as ClobSide,
-  SignatureType,
+  SignatureTypeV2,
   type ApiKeyCreds,
-  type UserOrder,
+  type CreateOrderOptions,
   type OpenOrder,
-  type Trade
-} from "@polymarket/clob-client";
+  type Trade,
+  type UserOrderV2
+} from "@polymarket/clob-client-v2";
 import { createWalletClient, http, type Chain } from "viem";
 import { polygon, polygonAmoy } from "viem/chains";
 import { privateKeyToAccount } from "viem/accounts";
@@ -42,7 +43,8 @@ export class OpenClawClient {
     try {
       const client = await this.ensureClobClient();
       const { userOrder } = this.prepareUserOrder(request);
-      const response = await client.createAndPostOrder(userOrder, undefined, OrderType.GTC, false, true);
+      const options = this.orderOptions();
+      const response = await client.createAndPostOrder(userOrder, options, OrderType.GTC);
       const orderId = this.extractOrderId(response);
       logger.debug({ orderKeys: this.safeKeys(response), dataKeys: this.safeKeys(response?.data) }, "Polymarket CLOB order response keys");
       const responsePreview = this.safeResponsePreview(response);
@@ -80,12 +82,33 @@ export class OpenClawClient {
     return Array.isArray(res.data) ? res.data : [];
   }
 
-  async buildLimitOrder(request: ExecutionRequest): Promise<{ tokenId: string; price: number; sizeTokens: number; orderHash?: string }> {
+  async buildLimitOrder(
+    request: ExecutionRequest
+  ): Promise<{
+    tokenID: string;
+    price: number;
+    sizeTokens: number;
+    side: ClobSide;
+    orderType: OrderType;
+    tickSize: string;
+    negRisk: boolean;
+    orderHash?: string;
+  }> {
     const client = await this.ensureClobClient();
     const { userOrder, sizeTokens } = this.prepareUserOrder(request);
-    const signed = await client.createOrder(userOrder);
+    const options = this.orderOptions();
+    const signed = await client.createOrder(userOrder, options);
     const orderHash = this.extractOrderId(signed);
-    return { tokenId: userOrder.tokenID, price: userOrder.price, sizeTokens, orderHash };
+    return {
+      tokenID: userOrder.tokenID,
+      price: userOrder.price,
+      sizeTokens,
+      side: userOrder.side,
+      orderType: OrderType.GTC,
+      tickSize: String(options.tickSize ?? ""),
+      negRisk: Boolean(options.negRisk),
+      orderHash
+    };
   }
 
   async listOpenOrders(limit = 20): Promise<OpenOrder[]> {
@@ -124,11 +147,18 @@ export class OpenClawClient {
     const creds = this.resolveApiCreds();
     const signatureType = this.resolveSignatureType();
     const funder = config.POLYMARKET_FUNDER_ADDRESS?.trim() || undefined;
-    this.clob = new ClobClient(host, clobChain, wallet, creds, signatureType, funder);
+    this.clob = new ClobClient({
+      host,
+      chain: clobChain,
+      signer: wallet,
+      creds,
+      signatureType,
+      funderAddress: funder
+    });
     return this.clob;
   }
 
-  private prepareUserOrder(request: ExecutionRequest): { userOrder: UserOrder; sizeTokens: number } {
+  private prepareUserOrder(request: ExecutionRequest): { userOrder: UserOrderV2; sizeTokens: number } {
     const price = Number(request.limitPrice);
     if (!(price > 0 && price < 1)) {
       throw new Error("Invalid limit price for CLOB order");
@@ -141,13 +171,20 @@ export class OpenClawClient {
     if (!Number.isFinite(sizeTokens) || sizeTokens <= 0) {
       throw new Error("Derived token size invalid");
     }
-    const userOrder: UserOrder = {
+    const userOrder: UserOrderV2 = {
       tokenID: request.tokenId,
       price,
       size: sizeTokens,
       side: ClobSide.BUY
     };
     return { userOrder, sizeTokens };
+  }
+
+  private orderOptions(): Partial<CreateOrderOptions> {
+    return {
+      tickSize: "0.01",
+      negRisk: false
+    };
   }
 
   private resolveApiCreds(): ApiKeyCreds {
@@ -160,9 +197,9 @@ export class OpenClawClient {
     return { key, secret, passphrase };
   }
 
-  private resolveSignatureType(): SignatureType {
-    if (config.POLYMARKET_SIGNATURE_TYPE === SignatureType.EOA) {
-      return SignatureType.EOA;
+  private resolveSignatureType(): SignatureTypeV2 {
+    if (config.POLYMARKET_SIGNATURE_TYPE === SignatureTypeV2.EOA) {
+      return SignatureTypeV2.EOA;
     }
     throw new Error("Only SignatureType=0 (EOA) is supported for CLOB execution");
   }

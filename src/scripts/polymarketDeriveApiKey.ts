@@ -1,7 +1,7 @@
 import fs from "node:fs/promises";
 import path from "node:path";
 import process from "node:process";
-import { ClobClient, Chain as ClobChain, SignatureType } from "@polymarket/clob-client";
+import { Chain as ClobChain, ClobClient, SignatureTypeV2 } from "@polymarket/clob-client-v2";
 import { privateKeyToAccount } from "viem/accounts";
 import { createWalletClient, http, type Chain as ViemChain } from "viem";
 import { polygon, polygonAmoy } from "viem/chains";
@@ -67,7 +67,7 @@ async function upsertEnvFile(values: Record<string, string>): Promise<void> {
 void (async () => {
   const options = parseArgs();
   const privateKey = normalizePrivateKey(config.POLYMARKET_PRIVATE_KEY);
-  if (config.POLYMARKET_SIGNATURE_TYPE !== SignatureType.EOA) {
+  if (config.POLYMARKET_SIGNATURE_TYPE !== SignatureTypeV2.EOA) {
     throw new Error("Only SignatureType=0 (EOA) is supported for automatic API key derivation");
   }
 
@@ -78,7 +78,13 @@ void (async () => {
   const host = process.env.POLYMARKET_CLOB_HOST?.trim() || DEFAULT_CLOB_HOSTS[clob] || DEFAULT_CLOB_HOSTS[ClobChain.POLYGON];
   const funder = config.POLYMARKET_FUNDER_ADDRESS?.trim() || undefined;
 
-  const client = new ClobClient(host, clob, wallet, undefined, SignatureType.EOA, funder);
+  const client = new ClobClient({
+    host,
+    chain: clob,
+    signer: wallet,
+    signatureType: SignatureTypeV2.EOA,
+    funderAddress: funder
+  });
   const creds = await client.createOrDeriveApiKey();
 
   const output = {
