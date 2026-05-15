@@ -29,6 +29,8 @@
     "openclaw:probe": "tsx src/scripts/openclawProbe.ts",
     "openclaw:build-order": "tsx src/scripts/openclawBuildOrder.ts",
     "openclaw:executions": "tsx src/scripts/openclawExecutions.ts",
+    "openclaw:open-orders": "tsx src/scripts/openclawOpenOrders.ts",
+    "openclaw:trades": "tsx src/scripts/openclawTrades.ts",
     "polymarket:derive-api-key": "tsx src/scripts/polymarketDeriveApiKey.ts",
     "lint": "tsc -p tsconfig.json --noEmit",
     "typecheck": "tsc -p tsconfig.json --noEmit"

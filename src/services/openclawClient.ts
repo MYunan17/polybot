@@ -6,7 +6,9 @@ import {
   Side as ClobSide,
   SignatureType,
   type ApiKeyCreds,
-  type UserOrder
+  type UserOrder,
+  type OpenOrder,
+  type Trade
 } from "@polymarket/clob-client";
 import { createWalletClient, http, type Chain } from "viem";
 import { polygon, polygonAmoy } from "viem/chains";
@@ -66,6 +68,20 @@ export class OpenClawClient {
     const signed = await client.createOrder(userOrder);
     const orderHash = this.extractOrderId(signed);
     return { tokenId: userOrder.tokenID, price: userOrder.price, sizeTokens, orderHash };
+  }
+
+  async listOpenOrders(limit = 20): Promise<OpenOrder[]> {
+    const client = await this.ensureClobClient();
+    const orders = await client.getOpenOrders(undefined, true);
+    if (!Array.isArray(orders)) return [];
+    return orders.slice(0, limit);
+  }
+
+  async listRecentTrades(limit = 20): Promise<Trade[]> {
+    const client = await this.ensureClobClient();
+    const trades = await client.getTrades(undefined, true);
+    if (!Array.isArray(trades)) return [];
+    return trades.slice(0, limit);
   }
 
   private headers(): Record<string, string> {
