@@ -287,7 +287,8 @@ export class SqliteStore {
       `SELECT COUNT(*) as count, COALESCE(SUM(size_usd), 0) as total
        FROM openclaw_executions
        WHERE date(created_at) = date('now', 'localtime')
-         AND status IN ('submitted', 'failed', 'rejected')`
+         AND status = 'submitted'
+         AND dry_run = 0`
     );
     return { orderCount: row?.count ?? 0, usdTotal: row?.total ?? 0 };
   }

@@ -126,6 +126,16 @@ export class OpenClawLiveExecutor {
         continue;
       }
 
+      logger.debug(
+        {
+          dailySubmittedOrders: orderCount,
+          dailySubmittedUsd: usdTotal,
+          maxDailyOrders: this.cfg.OPENCLAW_MAX_DAILY_ORDERS,
+          maxDailyUsd: this.cfg.OPENCLAW_MAX_DAILY_USD
+        },
+        "OpenClaw daily cap check"
+      );
+
       if (this.cfg.OPENCLAW_MAX_DAILY_ORDERS >= 0 && orderCount >= this.cfg.OPENCLAW_MAX_DAILY_ORDERS) {
         await this.record(plan, "skipped_daily_cap", "Daily order count cap reached");
         stats.skippedDailyCap += 1;
@@ -154,12 +164,8 @@ export class OpenClawLiveExecutor {
         usdTotal += cappedOrderSize;
       } else if (result.status === "rejected") {
         stats.rejected += 1;
-        orderCount += 1;
-        usdTotal += cappedOrderSize;
       } else if (result.status === "failed") {
         stats.failed += 1;
-        orderCount += 1;
-        usdTotal += cappedOrderSize;
       } else {
         stats.failed += 1;
       }
