@@ -44,7 +44,8 @@ export class OpenClawClient {
       const { userOrder } = this.prepareUserOrder(request);
       const response = await client.createAndPostOrder(userOrder, undefined, OrderType.GTC, false, true);
       const orderId = this.extractOrderId(response);
-      logger.debug({ orderKeys: this.safeKeys(response) }, "Polymarket CLOB order response keys");
+      logger.debug({ orderKeys: this.safeKeys(response), dataKeys: this.safeKeys(response?.data) }, "Polymarket CLOB order response keys");
+      const responsePreview = this.safeResponsePreview(response);
       if (orderId) {
         return {
           status: "submitted",
@@ -65,7 +66,7 @@ export class OpenClawClient {
       return {
         status: "rejected",
         orderId: undefined,
-        message: `Polymarket CLOB response missing order id | preview=${this.sanitizedResponse(response)}`,
+        message: `Polymarket CLOB response missing order id; response_preview=${responsePreview}`,
         raw: this.sanitizedResponse(response)
       };
     } catch (err: any) {
@@ -188,7 +189,7 @@ export class OpenClawClient {
 
   private describeClobError(err: any): { message: string; raw?: unknown } {
     const status = err?.response?.status;
-    const preview = this.safePreview(err?.response?.data ?? err?.data);
+    const preview = this.safeResponsePreview(err?.response?.data ?? err?.data);
     const baseMessage = err?.message ?? "Polymarket CLOB request failed";
     const statusPart = status ? `HTTP ${status}` : "";
     const detail = [statusPart, baseMessage, preview && `body: ${preview}`].filter(Boolean).join(" | ");
@@ -234,10 +235,58 @@ export class OpenClawClient {
 
   private sanitizedResponse(response: any): Record<string, unknown> {
     if (!response || typeof response !== "object") return {};
-    const allowedKeys = ["status", "state", "success", "message", "error", "orderId", "orderID", "id"];
+    const allowedKeys = ["status", "state", "success", "message", "error", "orderId", "orderID", "id", "hash", "orderHash", "data"];
     return allowedKeys.reduce<Record<string, unknown>>((acc, key) => {
-      if (key in response) acc[key] = response[key];
+      if (key === "data") {
+        const sanitizedData = this.sanitizeData(response[key]);
+        if (sanitizedData && Object.keys(sanitizedData).length) {
+          acc[key] = sanitizedData;
+        }
+        return acc;
+      }
+      if (key in response) {
+        acc[key] = this.redactValue(key, response[key]);
+      }
       return acc;
     }, {});
+  }
+
+  private sanitizeData(data: any, depth = 0): Record<string, unknown> | undefined {
+    if (!data || typeof data !== "object") return undefined;
+    const entries = Object.entries(data).slice(0, 20);
+    const result: Record<string, unknown> = {};
+    for (const [key, value] of entries) {
+      if (typeof value === "object" && value !== null && depth < 1) {
+        const nested = this.sanitizeData(value, depth + 1);
+        if (nested && Object.keys(nested).length) {
+          result[key] = nested;
+        }
+      } else {
+        result[key] = this.redactValue(key, value);
+      }
+    }
+    return result;
+  }
+
+  private redactValue(key: string, value: unknown): unknown {
+    const sensitive = /(key|secret|passphrase|private|signature|auth|token)/i;
+    if (sensitive.test(key)) {
+      return "[redacted]";
+    }
+    if (typeof value === "string" && sensitive.test(value)) {
+      return "[redacted]";
+    }
+    return value;
+  }
+
+  private safeResponsePreview(response: any): string {
+    try {
+      const sanitized = this.sanitizedResponse(response);
+      const json = JSON.stringify(sanitized);
+      if (!json) return "";
+      return json.length > 1000 ? `${json.slice(0, 1000)}…` : json;
+    } catch {
+      return "[unserializable]";
+    }
   }
 }
