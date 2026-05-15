@@ -199,14 +199,26 @@ export class OpenClawClient {
 
   private resolveSignatureType(funder?: `0x${string}`): SignatureTypeV2 {
     const typeValue = Number(config.POLYMARKET_SIGNATURE_TYPE ?? 0);
-    if (typeValue === SignatureTypeV2.POLY_1271) {
-      if (!funder) {
-        throw new Error("POLYMARKET_SIGNATURE_TYPE=3 requires POLYMARKET_FUNDER_ADDRESS (deposit wallet)");
-      }
-      return SignatureTypeV2.POLY_1271;
-    }
     if (typeValue === SignatureTypeV2.EOA) {
       return SignatureTypeV2.EOA;
+    }
+    if (typeValue === SignatureTypeV2.POLY_PROXY) {
+      if (!funder) {
+        throw new Error("POLYMARKET_SIGNATURE_TYPE=1 (POLY_PROXY) requires POLYMARKET_FUNDER_ADDRESS");
+      }
+      return SignatureTypeV2.POLY_PROXY;
+    }
+    if (typeValue === SignatureTypeV2.POLY_GNOSIS_SAFE) {
+      if (!funder) {
+        throw new Error("POLYMARKET_SIGNATURE_TYPE=2 (POLY_GNOSIS_SAFE) requires POLYMARKET_FUNDER_ADDRESS");
+      }
+      return SignatureTypeV2.POLY_GNOSIS_SAFE;
+    }
+    if (typeValue === SignatureTypeV2.POLY_1271) {
+      if (!funder) {
+        throw new Error("POLYMARKET_SIGNATURE_TYPE=3 (POLY_1271) requires POLYMARKET_FUNDER_ADDRESS (deposit wallet)");
+      }
+      return SignatureTypeV2.POLY_1271;
     }
     throw new Error(`Unsupported POLYMARKET_SIGNATURE_TYPE=${config.POLYMARKET_SIGNATURE_TYPE}`);
   }

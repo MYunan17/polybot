@@ -1,5 +1,6 @@
 import { config } from "../config";
 import { privateKeyToAccount } from "viem/accounts";
+import { SignatureTypeV2 } from "@polymarket/clob-client-v2";
 
 function normalizePrivateKey(raw?: string): `0x${string}` | undefined {
   const trimmed = raw?.trim();
@@ -23,6 +24,14 @@ function apiKeyPreview(key?: string): string {
   return `${prefix}… (${trimmed.length} chars)`;
 }
 
+function signatureTypeLabel(typeValue: number): string {
+  if (typeValue === SignatureTypeV2.POLY_1271) return "POLY_1271";
+  if (typeValue === SignatureTypeV2.POLY_PROXY) return "POLY_PROXY";
+  if (typeValue === SignatureTypeV2.POLY_GNOSIS_SAFE) return "POLY_GNOSIS_SAFE";
+  if (typeValue === SignatureTypeV2.EOA) return "EOA";
+  return `type_${typeValue}`;
+}
+
 void (async () => {
   const normalizedPk = normalizePrivateKey(config.POLYMARKET_PRIVATE_KEY);
   let signerAddress = "missing";
@@ -42,7 +51,7 @@ void (async () => {
   console.log("Polymarket identity overview:");
   console.log(`signer_address=${signerAddress}`);
   console.log(`funder_address=${shortValue(funderAddress)}`);
-  console.log(`signature_type=${signatureType}`);
+  console.log(`signature_type=${signatureType} (${signatureTypeLabel(signatureType)})`);
   console.log(`clob_host=${clobHost}`);
   console.log(`chain_id=${chainId}`);
   console.log(`openclaw_api_key_present=${yesNo(config.OPENCLAW_API_KEY)}`);

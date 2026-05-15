@@ -13,6 +13,8 @@ function shortValue(value?: string): string {
 function signatureTypeLabel(): string {
   const typeValue = Number(config.POLYMARKET_SIGNATURE_TYPE ?? 0);
   if (typeValue === 3) return "POLY_1271";
+  if (typeValue === 2) return "POLY_GNOSIS_SAFE";
+  if (typeValue === 1) return "POLY_PROXY";
   if (typeValue === 0) return "EOA";
   return `type_${typeValue}`;
 }

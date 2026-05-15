@@ -47,17 +47,31 @@ function shortAddress(value?: string): string {
   return value.length > 12 ? `${value.slice(0, 6)}…${value.slice(-4)}` : value;
 }
 
+function signatureTypeLabel(signatureType: number): string {
+  if (signatureType === SignatureTypeV2.POLY_1271) return "POLY_1271";
+  if (signatureType === SignatureTypeV2.POLY_PROXY) return "POLY_PROXY";
+  if (signatureType === SignatureTypeV2.POLY_GNOSIS_SAFE) return "POLY_GNOSIS_SAFE";
+  if (signatureType === SignatureTypeV2.EOA) return "EOA";
+  return `type_${signatureType}`;
+}
+
 function resolveSignatureType(): { signatureType: SignatureTypeV2; funder?: `0x${string}` } {
   const typeValue = Number(config.POLYMARKET_SIGNATURE_TYPE ?? 0);
-  if (typeValue === SignatureTypeV2.POLY_1271) {
-    const funder = normalizeAddress(config.POLYMARKET_FUNDER_ADDRESS);
-    if (!funder) {
-      throw new Error("POLYMARKET_SIGNATURE_TYPE=3 requires POLYMARKET_FUNDER_ADDRESS (deposit wallet)");
-    }
-    return { signatureType: SignatureTypeV2.POLY_1271, funder };
-  }
   if (typeValue === SignatureTypeV2.EOA) {
     return { signatureType: SignatureTypeV2.EOA };
+  }
+  if (typeValue === SignatureTypeV2.POLY_PROXY || typeValue === SignatureTypeV2.POLY_GNOSIS_SAFE || typeValue === SignatureTypeV2.POLY_1271) {
+    const funder = normalizeAddress(config.POLYMARKET_FUNDER_ADDRESS);
+    if (!funder) {
+      throw new Error(`POLYMARKET_SIGNATURE_TYPE=${typeValue} requires POLYMARKET_FUNDER_ADDRESS`);
+    }
+    if (typeValue === SignatureTypeV2.POLY_PROXY) {
+      return { signatureType: SignatureTypeV2.POLY_PROXY, funder };
+    }
+    if (typeValue === SignatureTypeV2.POLY_GNOSIS_SAFE) {
+      return { signatureType: SignatureTypeV2.POLY_GNOSIS_SAFE, funder };
+    }
+    return { signatureType: SignatureTypeV2.POLY_1271, funder };
   }
   throw new Error(`Unsupported POLYMARKET_SIGNATURE_TYPE=${config.POLYMARKET_SIGNATURE_TYPE}`);
 }
@@ -133,7 +147,7 @@ void (async () => {
 
   console.log(`signer_address=${shortAddress(account.address)}`);
   console.log(`funder_address=${shortAddress(funder) || "n/a"}`);
-  console.log(`signature_type=${signatureType}`);
+  console.log(`signature_type=${signatureType} (${signatureTypeLabel(signatureType)})`);
   Object.entries(output).forEach(([key, value]) => {
     console.log(`${key}=${value}`);
   });
