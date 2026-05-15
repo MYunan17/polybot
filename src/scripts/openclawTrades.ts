@@ -1,6 +1,25 @@
 import { logger } from "../logger";
 import { OpenClawClient } from "../services/openclawClient";
 
+interface CliFilters {
+  tokenId?: string;
+  marketId?: string;
+}
+
+function parseArgs(): CliFilters {
+  const filters: CliFilters = {};
+  for (let i = 0; i < process.argv.length; i += 1) {
+    const arg = process.argv[i];
+    if (arg === "--token-id" && i + 1 < process.argv.length) {
+      filters.tokenId = process.argv[i + 1];
+    }
+    if (arg === "--market-id" && i + 1 < process.argv.length) {
+      filters.marketId = process.argv[i + 1];
+    }
+  }
+  return filters;
+}
+
 function shortId(value?: string): string {
   if (!value) return "";
   return value.length > 12 ? `${value.slice(0, 6)}…${value.slice(-4)}` : value;
@@ -18,15 +37,34 @@ function fmtTimestamp(ts?: string): string {
 }
 
 void (async () => {
+  const filters = parseArgs();
   const client = new OpenClawClient();
-  const trades = await client.listRecentTrades(20);
+  const trades = await client.listRecentTrades(50);
   if (!trades.length) {
     console.log("No recent trades for current credentials.");
     return;
   }
 
-  console.log(`Showing up to 20 recent trades:`);
-  for (const trade of trades) {
+  const filtered = trades.filter((trade) => {
+    if (filters.tokenId && trade.asset_id !== filters.tokenId) return false;
+    if (filters.marketId && trade.market !== filters.marketId) return false;
+    return true;
+  });
+
+  console.log(
+    `Fetched ${trades.length} trades. After filters token=${filters.tokenId ?? "*"} market=${filters.marketId ?? "*"}, showing ${Math.min(
+      filtered.length,
+      20
+    )}:`
+  );
+  logger.debug({ responseKeys: trades.length ? Object.keys(trades[0]).slice(0, 20) : [] }, "Trades response keys");
+
+  if (!filtered.length) {
+    console.log("No trades matched filters.");
+    return;
+  }
+
+  for (const trade of filtered.slice(0, 20)) {
     const fields = [
       `trade=${shortId(trade.id)}`,
       `token=${shortId(trade.asset_id)}`,

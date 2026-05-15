@@ -45,11 +45,28 @@ export class OpenClawClient {
       const response = await client.createAndPostOrder(userOrder, undefined, OrderType.GTC, false, true);
       const orderId = this.extractOrderId(response);
       logger.debug({ orderKeys: this.safeKeys(response) }, "Polymarket CLOB order response keys");
+      if (orderId) {
+        return {
+          status: "submitted",
+          orderId,
+          message: `Polymarket CLOB order submitted at ${(request.limitPrice * 100).toFixed(2)}%`,
+          raw: this.sanitizedResponse(response)
+        };
+      }
+      const statusFlag = this.extractStatusFlag(response);
+      if (statusFlag === "accepted" || statusFlag === "open" || statusFlag === true) {
+        return {
+          status: "submitted",
+          orderId,
+          message: `Polymarket CLOB order accepted (pending id) at ${(request.limitPrice * 100).toFixed(2)}%`,
+          raw: this.sanitizedResponse(response)
+        };
+      }
       return {
-        status: "submitted",
-        orderId,
-        message: `Polymarket CLOB order submitted at ${(request.limitPrice * 100).toFixed(2)}%`,
-        raw: response
+        status: "rejected",
+        orderId: undefined,
+        message: `Polymarket CLOB response missing order id | preview=${this.sanitizedResponse(response)}`,
+        raw: this.sanitizedResponse(response)
       };
     } catch (err: any) {
       const { message, raw } = this.describeClobError(err);
@@ -75,6 +92,14 @@ export class OpenClawClient {
     const orders = await client.getOpenOrders(undefined, true);
     if (!Array.isArray(orders)) return [];
     return orders.slice(0, limit);
+  }
+
+  async getOpenOrderById(orderId: string): Promise<OpenOrder | undefined> {
+    if (!orderId) return undefined;
+    const client = await this.ensureClobClient();
+    const orders = await client.getOpenOrders({ id: orderId }, true);
+    if (!Array.isArray(orders) || !orders.length) return undefined;
+    return orders[0];
   }
 
   async listRecentTrades(limit = 20): Promise<Trade[]> {
@@ -200,5 +225,19 @@ export class OpenClawClient {
   private safeKeys(response: any): string[] {
     if (!response || typeof response !== "object") return [];
     return Object.keys(response).slice(0, 20);
+  }
+
+  private extractStatusFlag(response: any): string | boolean | undefined {
+    if (!response) return undefined;
+    return response.status ?? response.state ?? response.success;
+  }
+
+  private sanitizedResponse(response: any): Record<string, unknown> {
+    if (!response || typeof response !== "object") return {};
+    const allowedKeys = ["status", "state", "success", "message", "error", "orderId", "orderID", "id"];
+    return allowedKeys.reduce<Record<string, unknown>>((acc, key) => {
+      if (key in response) acc[key] = response[key];
+      return acc;
+    }, {});
   }
 }

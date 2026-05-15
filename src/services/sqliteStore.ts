@@ -355,6 +355,19 @@ export class SqliteStore {
     return rows.map(mapOpenClawExecutionRow);
   }
 
+  async listOpenClawExecutionsByPlan(planId: number): Promise<OpenClawExecutionRow[]> {
+    const db = await getDb();
+    const rows = await db.all<any[]>(
+      `SELECT id, plan_id, run_id, market_id, action, side, token_id, size_usd, limit_price, status,
+              tx_or_order_id, error_message, dry_run, created_at
+       FROM openclaw_executions
+       WHERE plan_id = ?
+       ORDER BY id DESC`,
+      planId
+    );
+    return rows.map(mapOpenClawExecutionRow);
+  }
+
   async countOpenClawPlans(runId?: string): Promise<number> {
     if (!runId) return 0;
     const db = await getDb();
