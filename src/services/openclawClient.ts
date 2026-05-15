@@ -6,9 +6,12 @@ import {
   OrderType,
   Side as ClobSide,
   SignatureTypeV2,
+  isV2Order,
+  orderToJsonV2,
   type ApiKeyCreds,
   type BalanceAllowanceResponse,
   type CreateOrderOptions,
+  type NewOrderV2,
   type OpenOrder,
   type SignedOrder,
   type Trade,
@@ -47,7 +50,11 @@ export class OpenClawClient {
       const client = await this.ensureClobClient();
       const { userOrder } = this.prepareUserOrder(request);
       const options = this.orderOptions();
-      const response = await client.createAndPostOrder(userOrder, options, OrderType.GTC);
+      const signedOrder = await client.createOrder(userOrder, options);
+      if (!isV2Order(signedOrder)) {
+        throw new Error("Polymarket deposit wallets require V2 order payloads");
+      }
+      const response = await client.postOrder(signedOrder, OrderType.GTC);
       const orderId = this.extractOrderId(response);
       logger.debug({ orderKeys: this.safeKeys(response), dataKeys: this.safeKeys(response?.data) }, "Polymarket CLOB order response keys");
       const responsePreview = this.safeResponsePreview(response);
@@ -123,7 +130,27 @@ export class OpenClawClient {
     const { userOrder, sizeTokens } = this.prepareUserOrder(request);
     const options = this.orderOptions();
     const signedOrder = await client.createOrder(userOrder, options);
+    if (!isV2Order(signedOrder)) {
+      throw new Error("Polymarket deposit wallets require V2 order payloads");
+    }
     return { signedOrder, userOrder, sizeTokens };
+  }
+
+  async buildPostPayloadPreview(request: ExecutionRequest): Promise<{
+    payload: NewOrderV2<OrderType>;
+    signedOrder: SignedOrder;
+    sizeTokens: number;
+  }> {
+    const client = await this.ensureClobClient();
+    const { userOrder, sizeTokens } = this.prepareUserOrder(request);
+    const options = this.orderOptions();
+    const signedOrder = await client.createOrder(userOrder, options);
+    if (!isV2Order(signedOrder)) {
+      throw new Error("Polymarket deposit wallets require V2 order payloads");
+    }
+    const owner = this.resolveOrderOwner();
+    const payload = orderToJsonV2(signedOrder, owner, OrderType.GTC, false, false);
+    return { payload, signedOrder, sizeTokens };
   }
 
   async listOpenOrders(limit = 20): Promise<OpenOrder[]> {
@@ -219,6 +246,14 @@ export class OpenClawClient {
       throw new Error("OPENCLAW API credentials are incomplete");
     }
     return { key, secret, passphrase };
+  }
+
+  private resolveOrderOwner(): string {
+    const funder = this.normalizeAddress(config.POLYMARKET_FUNDER_ADDRESS);
+    if (!funder) {
+      throw new Error("POLYMARKET_FUNDER_ADDRESS is required for deposit wallet orders");
+    }
+    return funder;
   }
 
   private resolveSignatureType(funder?: `0x${string}`): SignatureTypeV2 {

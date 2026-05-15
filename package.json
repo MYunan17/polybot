@@ -33,6 +33,7 @@
     "openclaw:trades": "tsx src/scripts/openclawTrades.ts",
     "openclaw:inspect-plan": "tsx src/scripts/openclawInspectPlan.ts",
     "openclaw:signed-order-preview": "tsx src/scripts/openclawSignedOrderPreview.ts",
+    "openclaw:post-payload-preview": "tsx src/scripts/openclawPostPayloadPreview.ts",
     "polymarket:derive-api-key": "tsx src/scripts/polymarketDeriveApiKey.ts",
     "polymarket:whoami": "tsx src/scripts/polymarketWhoami.ts",
     "polymarket:discover-wallet": "tsx src/scripts/polymarketDiscoverWallet.ts",
