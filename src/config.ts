@@ -20,6 +20,7 @@ const envSchema = z.object({
   POLYMARKET_FUNDER_ADDRESS: z.string().optional().default(""),
   POLYMARKET_PROXY_ADDRESS: z.string().optional().default(""),
   POLYMARKET_CHAIN_ID: z.coerce.number().default(137),
+  POLYMARKET_SIGNATURE_TYPE: z.coerce.number().int().min(0).default(0),
   OPENCLAW_URL: z.string().url().default("http://localhost:3000"),
   OPENCLAW_API_KEY: z.string().optional().default(""),
   ENABLE_OPENCLAW: boolEnv.default(false),

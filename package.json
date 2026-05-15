@@ -26,6 +26,7 @@
     "openclaw:approve": "tsx src/scripts/openclawApprove.ts",
     "openclaw:execute-approved": "tsx src/scripts/openclawExecuteApproved.ts",
     "openclaw:stage-live-plan": "tsx src/scripts/openclawStageLivePlan.ts",
+    "polymarket:derive-api-key": "tsx src/scripts/polymarketDeriveApiKey.ts",
     "lint": "tsc -p tsconfig.json --noEmit",
     "typecheck": "tsc -p tsconfig.json --noEmit"
   },
@@ -33,6 +34,7 @@
     "node": ">=20"
   },
   "dependencies": {
+    "@polymarket/clob-client": "^5.8.1",
     "axios": "^1.8.4",
     "dotenv": "^16.5.0",
     "p-limit": "^6.1.0",
@@ -41,6 +43,7 @@
     "rss-parser": "^3.13.0",
     "sqlite": "^5.1.1",
     "sqlite3": "^5.1.7",
+    "viem": "^2.9.20",
     "zod": "^3.24.4"
   },
   "devDependencies": {
