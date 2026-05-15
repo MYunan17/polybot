@@ -338,7 +338,7 @@ export class OpenClawClient {
         return acc;
       }
       if (key in response) {
-        acc[key] = this.redactValue(key, response[key]);
+        acc[key] = redactValueForKey(key, response[key]);
       }
       return acc;
     }, {});
@@ -355,21 +355,10 @@ export class OpenClawClient {
           result[key] = nested;
         }
       } else {
-        result[key] = this.redactValue(key, value);
+        result[key] = redactValueForKey(key, value);
       }
     }
     return result;
-  }
-
-  private redactValue(key: string, value: unknown): unknown {
-    const sensitive = /(key|secret|passphrase|private|signature|auth|token)/i;
-    if (sensitive.test(key)) {
-      return "[redacted]";
-    }
-    if (typeof value === "string" && sensitive.test(value)) {
-      return "[redacted]";
-    }
-    return value;
   }
 
   private safeResponsePreview(response: any): string {
@@ -383,3 +372,44 @@ export class OpenClawClient {
     }
   }
 }
+
+const SENSITIVE_KEY_SET = new Set([
+  "privatekey",
+  "apikey",
+  "secret",
+  "apisecret",
+  "passphrase",
+  "signature",
+  "authorization",
+  "authheader",
+  "bearer"
+]);
+
+function normalizeKeyName(key: string): string {
+  return key.replace(/[^a-z0-9]/gi, "").toLowerCase();
+}
+
+function isSensitiveKey(key: string): boolean {
+  if (!key) return false;
+  return SENSITIVE_KEY_SET.has(normalizeKeyName(key));
+}
+
+function redactValueForKey(key: string, value: unknown): unknown {
+  if (isSensitiveKey(key)) {
+    return "[redacted]";
+  }
+  return value;
+}
+
+function runSanitizerSelfCheck(): void {
+  const makerError = redactValueForKey("error", "maker address not allowed, please use the deposit wallet flow");
+  if (makerError !== "maker address not allowed, please use the deposit wallet flow") {
+    throw new Error("Response sanitizer should not redact non-sensitive 'error' fields");
+  }
+  const apiSecret = redactValueForKey("apiSecret", "super-secret-value");
+  if (apiSecret !== "[redacted]") {
+    throw new Error("Response sanitizer failed to redact sensitive apiSecret field");
+  }
+}
+
+runSanitizerSelfCheck();
