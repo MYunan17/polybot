@@ -23,6 +23,7 @@ const envSchema = z.object({
   POLYMARKET_SIGNATURE_TYPE: z.coerce.number().int().min(0).default(0),
   POLYMARKET_CLOB_HOST: z.string().url().default("https://clob.polymarket.com"),
   POLYMARKET_RPC_URL: z.string().optional().default(""),
+  POLYMARKET_RELAYER_URL: z.string().url().default("https://relayer-v2.polymarket.com"),
   OPENCLAW_URL: z.string().url().default("http://localhost:3000"),
   OPENCLAW_API_KEY: z.string().optional().default(""),
   OPENCLAW_API_SECRET: z.string().optional().default(""),
