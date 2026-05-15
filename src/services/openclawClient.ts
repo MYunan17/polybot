@@ -1,13 +1,16 @@
 import axios from "axios";
 import {
+  AssetType,
   Chain as ClobChain,
   ClobClient,
   OrderType,
   Side as ClobSide,
   SignatureTypeV2,
   type ApiKeyCreds,
+  type BalanceAllowanceResponse,
   type CreateOrderOptions,
   type OpenOrder,
+  type SignedOrder,
   type Trade,
   type UserOrderV2
 } from "@polymarket/clob-client-v2";
@@ -111,6 +114,18 @@ export class OpenClawClient {
     };
   }
 
+  async buildSignedOrderPreview(request: ExecutionRequest): Promise<{
+    signedOrder: SignedOrder;
+    userOrder: UserOrderV2;
+    sizeTokens: number;
+  }> {
+    const client = await this.ensureClobClient();
+    const { userOrder, sizeTokens } = this.prepareUserOrder(request);
+    const options = this.orderOptions();
+    const signedOrder = await client.createOrder(userOrder, options);
+    return { signedOrder, userOrder, sizeTokens };
+  }
+
   async listOpenOrders(limit = 20): Promise<OpenOrder[]> {
     const client = await this.ensureClobClient();
     const orders = await client.getOpenOrders(undefined, true);
@@ -131,6 +146,15 @@ export class OpenClawClient {
     const trades = await client.getTrades(undefined, true);
     if (!Array.isArray(trades)) return [];
     return trades.slice(0, limit);
+  }
+
+  async syncCollateralBalance(): Promise<{ before: BalanceAllowanceResponse; after: BalanceAllowanceResponse }> {
+    const client = await this.ensureClobClient();
+    const params = { asset_type: AssetType.COLLATERAL } as const;
+    const before = await client.getBalanceAllowance(params);
+    await client.updateBalanceAllowance(params);
+    const after = await client.getBalanceAllowance(params);
+    return { before, after };
   }
 
   private headers(): Record<string, string> {

@@ -32,9 +32,11 @@
     "openclaw:open-orders": "tsx src/scripts/openclawOpenOrders.ts",
     "openclaw:trades": "tsx src/scripts/openclawTrades.ts",
     "openclaw:inspect-plan": "tsx src/scripts/openclawInspectPlan.ts",
+    "openclaw:signed-order-preview": "tsx src/scripts/openclawSignedOrderPreview.ts",
     "polymarket:derive-api-key": "tsx src/scripts/polymarketDeriveApiKey.ts",
     "polymarket:whoami": "tsx src/scripts/polymarketWhoami.ts",
     "polymarket:discover-wallet": "tsx src/scripts/polymarketDiscoverWallet.ts",
+    "polymarket:sync-balance": "tsx src/scripts/polymarketSyncBalance.ts",
     "lint": "tsc -p tsconfig.json --noEmit",
     "typecheck": "tsc -p tsconfig.json --noEmit"
   },
